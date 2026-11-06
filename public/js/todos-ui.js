@@ -40,7 +40,9 @@ function itemRow(it, board, v, sessions, depth) {
           ${it.status !== 'todo' && it.status !== 'done' ? `<span class="chip ${it.status === 'blocked' ? 'needs_you' : 'working'}">${STATUS[it.status]}</span>` : ''}
           ${(it.blockedBy || []).map((d) => board.items.find((x) => x.id === d)).filter((x) => x && x.status !== 'done')
             .map((x) => `<span class="chip needs_you" title="Can't start until this is done">⛔ waits on ${esc(x.text.length > 40 ? `${x.text.slice(0, 40)}…` : x.text)}</span>`).join('')}
-          ${claimName ? `<span class="chip claim${claimLive ? ` ${claimLive.status}` : ''}" title="Claimed ${ago(it.claim.at)}">🔒 ${esc(claimName)}</span>` : ''}
+          ${claimName ? (it.claim.ended
+            ? `<span class="chip claim gone" title="Claimed ${ago(it.claim.at)}; that session ended ${ago(it.claim.ended)}, so any session can take it over">🔒 ${esc(claimName)} (session ended)</span>`
+            : `<span class="chip claim${claimLive ? ` ${claimLive.status}` : ''}" title="Claimed ${ago(it.claim.at)}">🔒 ${esc(claimName)}</span>`) : ''}
           ${ch.length ? `<span class="td-prog" title="${done} of ${ch.length} subtasks done"><span style="width:${(done / ch.length) * 100}%"></span></span><span class="sub">${done}/${ch.length}</span>` : ''}
           ${it.details ? `<button class="td-link" data-todo-toggle="${it.id}">📎 ${it.details} background</button>` : ''}
           ${it.note ? `<span class="sub">· ${esc(it.note)}</span>` : ''}
@@ -49,14 +51,31 @@ function itemRow(it, board, v, sessions, depth) {
       <div class="td-actions">
         <button title="Edit title, summary and priority" data-todo-edit="${it.id}">✎</button>
         <button title="Add a subtask" data-todo-sub="${it.id}">＋</button>
+        ${v.pods?.length && it.status !== 'done' && (!it.claim || it.claim.ended) ? `<button title="Start a new Claude session on this (opens a terminal window)" data-todo-start="${it.id}">▶</button>` : ''}
         ${it.claim ? `<button title="Release the claim" data-todo-release="${it.id}">🔓</button>` : (it.status !== 'done' ? `<button title="Claim it yourself" data-todo-claim="${it.id}">✋</button>` : '')}
         <select data-todo-status="${it.id}" title="Status">${['todo', 'doing', 'blocked', 'done'].map((s) => `<option value="${s}" ${s === it.status ? 'selected' : ''}>${STATUS[s]}</option>`).join('')}</select>
         <button title="Remove (and its subtasks)" data-todo-rm="${it.id}">✕</button>
       </div>
     </div>
     ${v.addingSub === it.id ? `<div class="td-subadd" style="--depth:${depth + 1}"><input type="text" data-keep="sub-${it.id}" data-sub-for="${it.id}" placeholder="New subtask…" /><button class="primary" data-todo-addsub="${it.id}">Add</button></div>` : ''}
+    ${v.starting === it.id ? startRow(it, v, depth) : ''}
     ${exp ? detailsHtml(it, v, sessions, depth, board.id) : ''}`;
   return row + ch.map((c) => itemRow(c, board, v, sessions, depth + 1)).join('');
+}
+
+/** Confirm row for "start a session on this": pick the worktree; the session opens in a terminal window. */
+function startRow(it, v, depth) {
+  const pods = v.pods;
+  const label = (p) => `${p.branch || (p.detached ? 'detached HEAD' : 'no branch')}${p.isMain ? ' (main checkout)' : ''} — ${p.path}`;
+  return `<div class="td-subadd td-start" style="--depth:${depth + 1}">
+      <span class="sub">Start a Claude session on this in</span>
+      ${pods.length > 1
+        ? `<select data-start-wt="${it.id}">${pods.map((p) => `<option value="${esc(p.path)}">${esc(label(p))}</option>`).join('')}</select>`
+        : `<span class="mono" data-start-wt="${it.id}" data-value="${esc(pods[0].path)}">${esc(label(pods[0]))}</span>`}
+      <span class="sub">It opens in a terminal window with the item claimed; you approve its permissions there as usual.</span>
+      <button class="ghost" data-todo-start-cancel="${it.id}">Cancel</button>
+      <button class="primary" data-todo-start-go="${it.id}">Start</button>
+    </div>`;
 }
 
 function editRow(it, depth) {

@@ -246,6 +246,8 @@ export class UI {
     const board = boards.find((b) => b.id === v.board) || { id: v.board, items: room.todos };
     const sessions = sessionIndex(state);
     const tab = v.tab || 'open';
+    // worktrees a "start a session on this" can open in (project boards only)
+    v.pods = !lobby && room.kind === 'project' ? room.pods.filter((p) => !p.removed).map(({ path, branch, detached, isMain }) => ({ path, branch, detached, isMain })) : [];
     // refresh open background panels when agents add more
     for (const id of v.expanded || []) {
       for (const b of boards) {
@@ -394,6 +396,15 @@ export class UI {
       else if (d.todoClaim) await api('/api/todos', { board: v.board, action: 'claim', id: d.todoClaim });
       else if (d.todoRelease) await api('/api/todos', { board: v.board, action: 'release', id: d.todoRelease });
       else if (d.todoNote) await this.addNote(boardOf(), d.todoNote);
+      else if (d.todoStart) { v.starting = v.starting === d.todoStart ? null : d.todoStart; this.render(false); }
+      else if (d.todoStartCancel) { v.starting = null; this.render(false); }
+      else if (d.todoStartGo) {
+        const el = $(`[data-start-wt="${d.todoStartGo}"]`, this.body);
+        const worktree = el?.value || el?.dataset.value;
+        t.disabled = true;
+        await api('/api/todos/start', { board: v.board, id: d.todoStartGo, worktree });
+        v.starting = null; this.render(false);
+      }
       else if (d.todoReopen) await api('/api/todos', { board: boardOf(), action: 'update', id: d.todoReopen, patch: { status: 'todo' } });
     } catch (err) { alert(err.message); }
   }
@@ -453,7 +464,7 @@ export class UI {
       }
       return;
     }
-    const tt = e.target.closest('[data-tab],[data-group],[data-scope],[data-todo-edit],[data-todo-save],[data-todo-cancel],[data-todo-toggle],[data-todo-sub],[data-todo-addsub],[data-todo-claim],[data-todo-release],[data-todo-note],[data-todo-reopen]');
+    const tt = e.target.closest('[data-tab],[data-group],[data-scope],[data-todo-edit],[data-todo-save],[data-todo-cancel],[data-todo-toggle],[data-todo-sub],[data-todo-addsub],[data-todo-claim],[data-todo-release],[data-todo-note],[data-todo-reopen],[data-todo-start],[data-todo-start-cancel],[data-todo-start-go]');
     if (tt) { e.preventDefault(); await this.onTodoClick(tt); return; }
     const r = e.target.closest('[data-range]');
     if (r) { this.current.range = r.dataset.range; this.render(false); return; }

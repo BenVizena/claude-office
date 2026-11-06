@@ -105,7 +105,11 @@ machine-readable output, \`--by "<short label>"\` to describe yourself (e.g. "cl
   a multi-part request, a plan you agreed on), add one item per task before you start, then claim each as you
   get to it. That's how the user follows your progress from the office.
 - **Claim before you start.** If \`claim\` says someone else holds it, pick something else or ask the user —
-  don't use \`--force\` unless the user tells you to take it over.
+  don't use \`--force\` unless the user tells you to take it over. A claim marked "session ended" was left by a
+  session that has closed: you can take it with a plain \`claim\` (read its background first with \`show\`).
+- **Board news arrives on its own.** When a session starts, and when an item you claimed or created changes (it was
+  unblocked, done by someone else, taken over) or the user adds an item, a short "[Claude Office to-do board]" note
+  is added to your context. Act on it only when it bears on what the user asked.
 - **Break big items down.** Add subtasks with \`--parent <id>\` when an item has several real steps; claim the
   subtask you are doing. When the last subtask is done the CLI will hint that the parent can be closed.
   To restructure existing items use \`move <id> --parent <id>\` — never delete and re-add them (that loses

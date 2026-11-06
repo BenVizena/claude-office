@@ -8,7 +8,9 @@ import { SessionScanner } from './scanner.js';
 import { buildOffice } from './office.js';
 import { Catalog, DecorStore } from './decor.js';
 import { Staff } from './staff.js';
-import { addItem, updateItem, removeItem, claimItem, releaseItem, addDetail, readDetails, listBoards, moveItem, addDependency, removeDependency } from './todos.js';
+import { addItem, updateItem, removeItem, claimItem, releaseItem, addDetail, readDetails, listBoards, moveItem, addDependency, removeDependency, markSessionClaims } from './todos.js';
+import { boardNews, forgetSession } from './nudges.js';
+import { startOnItem } from './launch.js';
 import { computeUsage } from './usage.js';
 import { useNonBlockingLocks, whenUnlocked } from './lock.js';
 import { listRuns, runSummary, loadRun, imagePath, removeRun, IMAGE_TYPES } from './results.js';
@@ -107,8 +109,17 @@ const routes = {
       scanner.scan();
       broadcast({ type: 'event', event: b.hook_event_name, sessionId: b.session_id, message: b.message || null });
     }
+    // claims follow the session's life: ended -> anyone may take them over; back (resume) -> they're its own again
+    const ev = b.hook_event_name;
+    if (ev === 'SessionEnd' || ev === 'SessionStart' || ev === 'UserPromptSubmit') {
+      try { if (await whenUnlocked(() => markSessionClaims(b.session_id, ev === 'SessionEnd' ? Date.now() : null))) markDirty(); }
+      catch (e) { console.error('claim update failed:', e.message); }
+    }
+    if (ev === 'SessionEnd') forgetSession(b.session_id);
     markDirty();
-    return { ok: true };
+    // board news the hook adds to the session's context (SessionStart / UserPromptSubmit only)
+    const context = await boardNews(b.session_id, ev, b.cwd);
+    return context ? { ok: true, context } : { ok: true };
   },
 
   'GET /api/todos/details': async (b, req) => {
@@ -143,6 +154,13 @@ const routes = {
       if (b.action === 'undepend') return removeDependency(slug, b.id, b.on, { by: 'you' });
       throw new Error('unknown action');
     });
+    markDirty();
+    return r;
+  },
+
+  // "Start a session on this": a new interactive claude in a terminal window, with the item claimed for it
+  'POST /api/todos/start': async (b) => {
+    const r = await whenUnlocked(() => startOnItem({ room: findRoom(String(b.board)), id: String(b.id), worktree: String(b.worktree || ''), claudePath: settings.claudePath }));
     markDirty();
     return r;
   },

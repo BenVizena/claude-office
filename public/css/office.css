@@ -223,6 +223,11 @@ body.placing canvas { cursor: move !important; }
 .td-subadd { display: flex; gap: 8px; padding: 6px 4px 8px calc(30px + var(--depth) * 22px); }
 .td-subadd input { flex: 1; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 13px; }
 .td-subadd .primary { padding: 6px 12px; font-size: 13px; }
+.td-start { flex-wrap: wrap; align-items: center; background: #f6f8fa; border-radius: 8px; padding-top: 8px; margin-right: 4px; }
+.td-start > .sub, .td-start select, .td-start .mono { flex-basis: 100%; }
+.td-start select { min-width: 0; font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 8px; }
+.td-start .mono { font-size: 12px; overflow-wrap: anywhere; }
+.td-start .ghost { margin-left: auto; }
 .td-details { margin: 0 4px 10px calc(30px + var(--depth) * 22px); padding: 10px 12px; background: #f7f7f5; border-radius: 12px; display: flex; flex-direction: column; gap: 10px; }
 .td-details .add-row input { padding: 6px 10px; font-size: 13px; }
 .td-details .add-row button { border: 1px solid var(--line); background: white; border-radius: 8px; font-size: 13px; padding: 0 12px; }
@@ -339,6 +344,7 @@ body.placing canvas { cursor: move !important; }
 .tt-card .tt-st { color: #0a7d0a; }
 .tt-card .tt-st.blocked { color: #c25e1c; }
 .tt-card .tt-claim { overflow: hidden; text-overflow: ellipsis; }
+.tt-card .tt-claim.ended { opacity: .6; }
 .tt-card .tt-link { position: absolute; right: -6px; top: 50%; width: 12px; height: 12px; margin-top: -6px; border-radius: 50%;
   background: #e0803a; border: 2px solid #fff; box-shadow: 0 0 0 1px #e0803a55; cursor: crosshair; opacity: .35; transition: opacity .15s, transform .15s; }
 .tt-card:hover .tt-link { opacity: 1; transform: scale(1.15); }

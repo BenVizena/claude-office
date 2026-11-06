@@ -2,7 +2,7 @@
 // Shared by the server and bin/office-todo.js, so writes take a lock file.
 //
 // Item: { id, text, status: todo|doing|blocked|done, priority, parent?, order?, blockedBy?: [ids], by, bySession?,
-//         claim?: { by, session, at }, createdAt, updatedAt, completedAt?, completedBy?, note? }
+//         claim?: { by, session, at, ended? }, createdAt, updatedAt, completedAt?, completedBy?, note? }
 // parent makes a subtask tree; blockedBy are dependencies ("can't start until those are done") across the board.
 // order sorts siblings once someone has arranged them by hand.
 import fs from 'node:fs';
@@ -13,6 +13,11 @@ import { withFileLock } from './lock.js';
 
 export const GLOBAL_BOARD = 'office';
 const CLAIM_STALE_MS = 6 * 3600000; // an untouched claim older than this can be taken over
+
+/** Can someone else take this claim without --force? (its session ended, or nobody touched it for hours) */
+export function claimIsStale(c, now = Date.now()) {
+  return !!c && (!!c.ended || now - c.at >= CLAIM_STALE_MS);
+}
 
 function fileFor(slug) {
   if (!/^[a-z0-9-]+$/.test(slug)) throw new Error(`bad board id: ${slug}`);
@@ -171,7 +176,7 @@ export function claimItem(slug, id, { by, session, force = false }) {
     if (it.status === 'done') throw new Error(`"${it.text}" is already done`);
     const c = it.claim;
     const mine = c && ((session && c.session === session) || (!session && c.by === by));
-    if (c && !mine && !force && Date.now() - c.at < CLAIM_STALE_MS) {
+    if (c && !mine && !force && !claimIsStale(c)) {
       throw new Error(`already claimed by ${c.by} ${Math.round((Date.now() - c.at) / 60000)} min ago — pick another item, or pass --force to take it over`);
     }
     it.claim = { by, ...(session ? { session } : {}), at: Date.now() };
@@ -194,6 +199,28 @@ export function releaseItem(slug, id, { by }) {
     it.updatedBy = by;
     return { ...it };
   });
+}
+
+/**
+ * A session ended (ended = time) or came back (ended = null, e.g. after --resume): flag its open claims so anyone can
+ * take them over without --force. The claim itself stays, so the board still shows who was on it.
+ * Returns how many claims changed. Only boards that hold one of its claims are written.
+ */
+export function markSessionClaims(sessionId, ended) {
+  if (!sessionId) return 0;
+  let changed = 0;
+  for (const bd of listBoards()) {
+    const hit = (it) => it.claim?.session === sessionId && it.status !== 'done' && !!it.claim.ended !== !!ended;
+    if (!bd.items.some(hit)) continue;
+    mutate(bd.id, null, (b) => {
+      for (const it of b.items) {
+        if (!hit(it)) continue;
+        if (ended) it.claim.ended = ended; else delete it.claim.ended;
+        changed++;
+      }
+    });
+  }
+  return changed;
 }
 
 /** Removes an item and all of its subtasks. */

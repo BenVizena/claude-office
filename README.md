@@ -21,6 +21,13 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
 - **Agents keep the boards up to date themselves.** With the `office-todo` skill installed, your sessions claim the
   to-dos they're working on, split big ones into subtasks, attach notes on what they found, mark items done or
   blocked, and set their own speech bubble. They raise a ✋ only when they need a decision from you.
+- **Sessions hear about board changes.** The office hooks add a short note to a session's context when it starts
+  (what's open, what it holds) and on later prompts when something it claimed or created changes: an item it waited
+  on was unblocked, someone else finished or took it over, or you added work. Nothing is added when nothing changed.
+  When a session ends, its claims are marked "session ended" so another session can take them without `--force`.
+- **▶ Start a session on an item.** On a project board, ▶ opens a terminal window running `claude` in the worktree
+  you pick, with the item already claimed for it. It's an ordinary interactive session: you approve its permissions
+  as usual.
 - **Results.** Sessions can post charts, tables, images and short notes (test runs, benchmarks, training metrics)
   with `office-todo results …`, partial results included. A small screen with a live sparkline goes up on the
   agent's desk and a "📊 View results" tab sits above its speech bubble; click either to open the results window.

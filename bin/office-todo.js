@@ -93,7 +93,7 @@ function line(it, board, indent = '') {
   const kids = children(board, it.id);
   const prog = kids.length ? ` (${kids.filter((k) => k.status === 'done').length}/${kids.length} subtasks)` : '';
   const pri = it.priority && it.priority !== 'normal' ? ` [${it.priority}]` : '';
-  const claim = it.claim ? `  ← claimed by ${it.claim.session === session && session ? 'you' : it.claim.by}` : '';
+  const claim = it.claim ? `  ← claimed by ${it.claim.session === session && session ? 'you' : it.claim.by}${it.claim.ended ? ' (session ended — free to take over)' : ''}` : '';
   const note = (it.summary ? `\n${indent}      ${it.summary}` : '') + (it.note ? `\n${indent}      note: ${it.note}` : '');
   const waits = board.items?.length ? openBlockers(board, it) : [];
   const dep = waits.length ? `  ⛔ waits on ${waits.map((w) => w.id).join(', ')}` : '';

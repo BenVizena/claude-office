@@ -95,7 +95,7 @@ export function treeTabHtml(board, v, sessions) {
         <div class="tt-meta">
           ${waits.length ? `<span class="tt-wait" title="Waiting on: ${esc(waits.map((w) => w.text).join(', '))}">⛔ ${waits.length}</span>` : ''}
           ${it.status === 'doing' ? '<span class="tt-st">in progress</span>' : it.status === 'blocked' ? '<span class="tt-st blocked">blocked</span>' : ''}
-          ${claim ? `<span class="tt-claim" title="Claimed ${ago(it.claim.at)}">🔒 ${esc(claim)}</span>` : ''}
+          ${claim ? `<span class="tt-claim${it.claim.ended ? ' ended' : ''}" title="Claimed ${ago(it.claim.at)}${it.claim.ended ? `; that session ended ${ago(it.claim.ended)}, so any session can take it over` : ''}">${it.claim.ended ? '🔓' : '🔒'} ${esc(claim)}</span>` : ''}
         </div>
         <span class="tt-link" data-tt-link="${it.id}" title="Drag onto an item that has to wait for this one"></span>
       </div>`;

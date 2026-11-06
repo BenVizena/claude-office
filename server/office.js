@@ -41,7 +41,7 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
   // which todos each session has claimed (shown at their desk)
   const claims = new Map();
   for (const bd of listBoards()) for (const it of bd.items) {
-    if (it.claim?.session && it.status !== 'done') {
+    if (it.claim?.session && !it.claim.ended && it.status !== 'done') {
       if (!claims.has(it.claim.session)) claims.set(it.claim.session, []);
       claims.get(it.claim.session).push({ board: bd.id, id: it.id, text: it.text, status: it.status });
     }
