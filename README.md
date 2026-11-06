@@ -2,6 +2,8 @@
 
 A light, airy, low-poly isometric office that visualizes your Claude Code work.
 
+![The office: a lobby and three project rooms with agents at their desks](docs/screenshots/office.png)
+
 - **Rooms** are projects (git repos; worktrees of the same repo share a room). They grow with their worktrees and only
   shrink once a worktree has been gone for 3 days.
 - **Desk pods** are worktrees — the sign shows the checked-out branch. Paper stacks = uncommitted files.
@@ -26,6 +28,23 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
 - **Windows** let daylight into every room. The designer can change the view outside (meadow, mountains, lake, city,
   sunset city, beach, desert, snow, cherry blossom, rain, night sky, space, underwater…).
 - Only projects with activity in the last 3 days get a room (`roomMaxAgeDays`).
+
+## Screenshots
+
+| | |
+|---|---|
+| ![An agent typing with two interns (subagents) beside it](docs/screenshots/agents-working.png) | ![Speech bubbles showing each agent's status](docs/screenshots/speech-bubbles.png) |
+| **Working agents** — interns appear while subagents run | **Speech bubbles** — what each agent is up to |
+| ![Two desk pods, one per worktree, and an agent asking a question](docs/screenshots/needs-you-and-worktrees.png) | ![Session panel with status, context and claimed to-dos](docs/screenshots/session-panel.png) |
+| **Worktrees and ✋ needs you** — one pod per branch | **Session panel** — click any agent |
+| ![To-do board with subtasks, claims and blocked items](docs/screenshots/todo-board.png) | ![To-do tree with dependency arrows](docs/screenshots/todo-tree.png) |
+| **To-do board** — subtasks, claims, priorities | **Tree tab** — drag to nest, draw dependencies |
+| ![Completed to-dos grouped by day](docs/screenshots/todo-completed.png) | ![Branches board for a project](docs/screenshots/branches-board.png) |
+| **Completed** — by day, week or month | **Branches board** — worktrees, sessions, commits |
+| ![Office overview board with token bars per session](docs/screenshots/office-overview-board.png) | ![Usage board with daily tokens and per-model split](docs/screenshots/usage-board.png) |
+| **Office overview** — every project at a glance | **Usage** — tokens by day, model, project, session |
+| ![The office manager briefing on all projects](docs/screenshots/office-manager.png) | ![A room redecorated as a greenhouse with cherry blossoms outside](docs/screenshots/designer-redecorated.png) |
+| **Office manager** — a briefing across projects | **The designer** — redecorates on request |
 
 ## Requirements
 
