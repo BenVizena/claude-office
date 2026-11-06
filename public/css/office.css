@@ -123,7 +123,8 @@ kbd { display: inline-block; min-width: 20px; padding: 0 5px; margin: 0 1px; bor
 .tag.alert { background: var(--alert); color: white; animation: bob 1s ease-in-out infinite; font-size: 13px; }
 .tag.staff { background: #2b2d31e8; color: white; font-weight: 450; max-width: 260px; white-space: normal; text-align: center; }
 .tag.room { background: none; box-shadow: none; font-size: 15px; font-weight: 700; color: #5a5e66; letter-spacing: 0.02em; }
-@keyframes bob { 50% { transform: translateY(-10px); } }
+/* `translate`, not `transform`: CSS2DRenderer positions labels with an inline transform, which an animated transform would override */
+@keyframes bob { 50% { translate: 0 -10px; } }
 .panel-body > * { flex-shrink: 0; }
 .panel-body > .chat { flex-shrink: 1; }
 .panel-body a { color: var(--ink); }

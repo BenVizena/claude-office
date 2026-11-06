@@ -342,7 +342,7 @@ export class UI {
         <div>Last 7 days</div><div><b>${fmtTok(u.week.total)}</b> tokens · ${fmtTok(u.week.output)} output · ${u.week.turns} turns</div>
         <div>Cache hit</div><div>${Math.round(u.week.cacheHit * 100)}% of input read from cache</div>
         <div>Subagents</div><div>${Math.round(u.week.subagentShare * 100)}% of this week's tokens</div>
-        <div>API-equivalent</div><div>≈ $${u.week.costUsd.toFixed(2)} this week <span class="sub">(list prices; your plan isn't billed this way)</span></div>
+        ${typeof u.week.costUsd === 'number' ? `<div>API-equivalent</div><div>≈ $${u.week.costUsd.toFixed(2)} this week <span class="sub">(list prices; your plan isn't billed this way)</span></div>` : ''}
       </div>
       <h3>Daily tokens</h3><div style="display:flex;gap:3px;align-items:flex-end">${bars}</div>
       <h3>By model (7 days)</h3>
