@@ -5,7 +5,12 @@ import assert from 'node:assert/strict';
 import {
   readBoard, addItem, updateItem, claimItem, releaseItem, addDependency, readDetails, setCheck, approveCheck,
 } from '../server/todos.js';
-import { scopeOf, nextItem, startRun, stopRun, tick, turnOver, DEFAULT_STEPS } from '../server/chain.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { scopeOf, nextItem, startRun, stopRun, tick, turnOver, requestRun, dropRequest, DEFAULT_STEPS } from '../server/chain.js';
+import * as gitwork from '../server/gitwork.js';
+import { sessionRunPolicy, noteLaunch, launchesToday, RUN_ENV } from '../server/runpolicy.js';
 import { runCheck } from '../server/checks.js';
 
 let n = 0;
@@ -191,10 +196,221 @@ describe('running a sequence', () => {
     const o = office(s);
     startRun(s, { root: a.id, worktree: TEST_HOME });
     await tick(s, o.ctx);
-    stopRun(s);
-    assert.equal(readBoard(s).run.stopped.reason, 'stopped by you');
+    stopRun(s); // first stop: nothing new starts, the running step may still finish
+    assert.equal(readBoard(s).run.stopping.reason, 'stopped by you');
+    assert.equal(await tick(s, o.ctx), 'draining');
+    stopRun(s); // second stop: right away
+    assert.match(readBoard(s).run.stopped.reason, /stopped by you/);
     assert.equal(get(s, a.id).claim.session, 'sess-1');
     assert.equal(await tick(s, o.ctx), 'idle');
+  });
+
+  test('a stopped run whose last step finishes cleanly ends as stopped, not finished', async () => {
+    const s = fresh();
+    const a = add(s, 'x'), b = add(s, 'y');
+    addDependency(s, b.id, a.id, { by: 't' });
+    const o = office(s);
+    startRun(s, { root: a.id, worktree: TEST_HOME });
+    await tick(s, o.ctx);
+    stopRun(s);
+    o.finish(a.id);
+    assert.equal(await tick(s, o.ctx), 'stopped');
+    assert.equal(readBoard(s).run.stopped.reason, 'stopped by you');
+    assert.equal(o.launched.length, 1, 'b never started');
+  });
+});
+
+// ---------------------------------------------------------------- parallel (real git repos)
+const gitIn = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8' }).trim();
+function repo() {
+  const dir = fs.mkdtempSync(path.join(TEST_HOME, 'repo-'));
+  gitIn(dir, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(dir, 'base.txt'), 'base\n');
+  gitIn(dir, 'add', '-A'); gitIn(dir, 'commit', '-q', '-m', 'init');
+  return dir;
+}
+/** Parallel office: real worktrees; the fake worker writes a file and commits it in its own worktree. */
+function parallelOffice(slug, base) {
+  const o = office(slug);
+  o.ctx.git = gitwork;
+  o.ctx.launch = async ({ id, worktree, branch }) => {
+    const session = `sess-${o.launched.length + 1}`;
+    claimItem(slug, id, { by: `claude ${session}`, session });
+    o.launched.push({ id, session, worktree, branch });
+    return { session };
+  };
+  o.work = (id, file, text = `${id}\n`, { commit = true } = {}) => {
+    const step = readBoard(slug).run.active.find((x) => x.id === id);
+    fs.writeFileSync(path.join(step.worktree, file), text);
+    if (commit) { gitIn(step.worktree, 'add', '-A'); gitIn(step.worktree, 'commit', '-q', '-m', `work ${id}`); }
+    o.finish(id);
+  };
+  return o;
+}
+
+describe('parallel runs', () => {
+  test('fan-out runs side by side in their own worktrees, and the join starts after both are merged', async () => {
+    const base = repo();
+    const s = fresh();
+    const a = add(s, 'A'), b = add(s, 'B'), c = add(s, 'C'), d = add(s, 'D');
+    addDependency(s, b.id, a.id, { by: 't' }); addDependency(s, c.id, a.id, { by: 't' });
+    addDependency(s, d.id, b.id, { by: 't' }); addDependency(s, d.id, c.id, { by: 't' });
+    const o = parallelOffice(s, base);
+    startRun(s, { root: a.id, worktree: base, parallel: 2 });
+
+    assert.equal(await tick(s, o.ctx), 'launched');
+    assert.deepEqual(o.launched.map((x) => x.id), [a.id], 'only A is ready');
+    const aStep = readBoard(s).run.active[0];
+    assert.match(aStep.branch, new RegExp(`^office/${a.id}-`));
+    assert.ok(fs.existsSync(path.join(aStep.worktree, 'base.txt')), 'its worktree starts from the base HEAD');
+    assert.deepEqual(await gitwork.dirtyFiles(base), [], 'step worktrees stay out of the base status');
+
+    o.work(a.id, 'a.txt');
+    assert.equal(await tick(s, o.ctx), 'launched');
+    assert.ok(fs.existsSync(path.join(base, 'a.txt')), 'A was merged into the base');
+    assert.ok(!fs.existsSync(aStep.worktree), 'and its worktree removed');
+    assert.deepEqual(o.launched.slice(1).map((x) => x.id).sort(), [b.id, c.id].sort(), 'B and C start together');
+    const [bw, cw] = [b.id, c.id].map((id) => readBoard(s).run.active.find((x) => x.id === id).worktree);
+    assert.ok(fs.existsSync(path.join(bw, 'a.txt')) && fs.existsSync(path.join(cw, 'a.txt')), 'both start from the merged A');
+
+    o.work(b.id, 'b.txt');
+    assert.equal(await tick(s, o.ctx), 'advanced');
+    assert.equal(o.launched.length, 3, 'D still waits on C');
+    o.work(c.id, 'c.txt');
+    assert.equal(await tick(s, o.ctx), 'launched');
+    const dStep = readBoard(s).run.active.find((x) => x.id === d.id);
+    for (const f of ['a.txt', 'b.txt', 'c.txt']) assert.ok(fs.existsSync(path.join(dStep.worktree, f)), `D sees ${f}`);
+
+    o.work(d.id, 'd.txt');
+    assert.equal(await tick(s, o.ctx), 'finished');
+    assert.equal(readBoard(s).run.steps, 4);
+    assert.match(gitIn(base, 'log', '--oneline'), /Merge office\//);
+    assert.equal(gitIn(base, 'worktree', 'list').split('\n').length, 1, 'no step worktrees left');
+  });
+
+  test('a merge conflict reopens the item and keeps its branch; the other step is merged', async () => {
+    const base = repo();
+    const s = fresh();
+    const a = add(s, 'A'), b = add(s, 'B');
+    const root = add(s, 'root');
+    addDependency(s, a.id, root.id, { by: 't' }); addDependency(s, b.id, root.id, { by: 't' });
+    updateItem(s, root.id, { status: 'done', by: 't' });
+    const o = parallelOffice(s, base);
+    startRun(s, { root: root.id, worktree: base, parallel: 2 });
+    await tick(s, o.ctx);
+    assert.equal(o.launched.length, 2);
+    o.work(a.id, 'same.txt', 'from A\n');
+    o.work(b.id, 'same.txt', 'from B\n');
+    assert.equal(await tick(s, o.ctx), 'stopped', 'both finished in the same round, so nothing is left to drain');
+    const run = readBoard(s).run;
+    assert.match(run.stopped.reason, /merging "B" .*conflicted in same.txt/);
+    assert.equal(get(s, a.id).status, 'done');
+    assert.equal(get(s, b.id).status, 'doing');
+    assert.match(get(s, b.id).note, /merging it conflicted/);
+    assert.match(fs.readFileSync(path.join(base, 'same.txt'), 'utf8'), /^from A\r?\n$/); // (autocrlf may add \r)
+    assert.deepEqual(await gitwork.dirtyFiles(base), [], 'the failed merge was undone');
+    assert.match(gitIn(base, 'branch', '--list', 'office/*'), new RegExp(`office/${b.id}-`), "B's branch is kept");
+    assert.equal(await tick(s, o.ctx), 'idle');
+  });
+
+  test('uncommitted work in a step worktree is not merged', async () => {
+    const base = repo();
+    const s = fresh();
+    const a = add(s, 'A');
+    const o = parallelOffice(s, base);
+    startRun(s, { root: a.id, worktree: base, parallel: 2 });
+    await tick(s, o.ctx);
+    o.work(a.id, 'a.txt', 'x', { commit: false });
+    assert.equal(await tick(s, o.ctx), 'stopped');
+    assert.match(readBoard(s).run.stopped.reason, /left uncommitted changes/);
+    assert.equal(get(s, a.id).status, 'doing');
+    assert.ok(!fs.existsSync(path.join(base, 'a.txt')));
+  });
+
+  test('a dirty base is not merged into', async () => {
+    const base = repo();
+    const s = fresh();
+    const a = add(s, 'A');
+    const o = parallelOffice(s, base);
+    startRun(s, { root: a.id, worktree: base, parallel: 2 });
+    await tick(s, o.ctx);
+    fs.writeFileSync(path.join(base, 'mine.txt'), 'the user is working here');
+    o.work(a.id, 'a.txt');
+    assert.equal(await tick(s, o.ctx), 'stopped');
+    assert.match(readBoard(s).run.stopped.reason, /has uncommitted changes/);
+    assert.equal(get(s, a.id).status, 'doing', 'not done until merged, so nothing builds on it');
+  });
+
+  test('the step cap counts sessions started, and the launch policy can stop it', async () => {
+    const base = repo();
+    const s = fresh();
+    const root = add(s, 'root');
+    const kids = [1, 2, 3].map((i) => add(s, `k${i}`));
+    for (const k of kids) addDependency(s, k.id, root.id, { by: 't' });
+    updateItem(s, root.id, { status: 'done', by: 't' });
+    const o = parallelOffice(s, base);
+    startRun(s, { root: root.id, worktree: base, parallel: 3, max: 2 });
+    await tick(s, o.ctx);
+    assert.equal(o.launched.length, 2, 'cap 2 although 3 are ready');
+    let calls = 0;
+    o.ctx.canLaunch = () => (++calls ? 'daily cap' : null);
+    o.work(o.launched[0].id, 'f1');
+    o.work(o.launched[1].id, 'f2');
+    assert.equal(await tick(s, o.ctx), 'finished');
+    assert.match(readBoard(s).run.stopped.reason, /cap of 2 steps/);
+  });
+});
+
+describe('step folder cleanup', () => {
+  test('a leftover folder is deleted once git no longer has it as a worktree', async () => {
+    const base = repo();
+    const wt = await gitwork.createStepWorktree(base, 'abc123');
+    assert.equal(await gitwork.sweepLeftover(base, wt.worktree), false, 'a live worktree is never deleted');
+    gitIn(base, 'worktree', 'remove', '--force', wt.worktree);
+    fs.mkdirSync(wt.worktree, { recursive: true }); // what Windows leaves when a terminal still sat in it
+    fs.writeFileSync(path.join(wt.worktree, 'stray.txt'), 'x');
+    assert.equal(await gitwork.sweepLeftover(base, wt.worktree), true);
+    assert.ok(!fs.existsSync(wt.worktree));
+    // a leftover still in use doesn't block a new worktree for the same item
+    fs.mkdirSync(wt.worktree, { recursive: true });
+    const again = await gitwork.createStepWorktree(base, 'abc123');
+    assert.notEqual(again.worktree, wt.worktree);
+    assert.ok(fs.existsSync(path.join(again.worktree, 'base.txt')));
+  });
+});
+
+describe('requests and policy', () => {
+  test('a session asks; one request per board; starting a run clears it', () => {
+    const s = fresh();
+    const a = add(s, 'x'), b = add(s, 'y');
+    addDependency(s, b.id, a.id, { by: 't' });
+    const r = requestRun(s, { root: a.id, worktree: TEST_HOME, max: 3, parallel: 9, by: 'claude q', bySession: 'q' });
+    assert.deepEqual(r.scope.sort(), [a.id, b.id].sort());
+    assert.equal(r.parallel, 4, 'parallel is capped');
+    assert.throws(() => requestRun(s, { root: a.id, worktree: TEST_HOME, by: 'claude z', bySession: 'z' }), /already asked/);
+    requestRun(s, { root: a.id, worktree: TEST_HOME, max: 2, by: 'claude q', bySession: 'q' }); // the same session may revise it
+    assert.equal(readBoard(s).runRequest.max, 2);
+    startRun(s, { root: a.id, worktree: TEST_HOME, by: 'claude q (you approved)', bySession: 'q' });
+    assert.equal(readBoard(s).runRequest, undefined);
+    assert.equal(readBoard(s).run.bySession, 'q');
+    assert.throws(() => requestRun(s, { root: a.id, worktree: TEST_HOME, by: 'claude q', bySession: 'q' }), /already running/);
+    stopRun(s); stopRun(s);
+    requestRun(s, { root: a.id, worktree: TEST_HOME, by: 'claude q', bySession: 'q' });
+    assert.equal(dropRequest(s).bySession, 'q');
+    assert.equal(readBoard(s).runRequest, undefined);
+  });
+
+  test('sessions a run started can never start one; the setting decides for the rest', () => {
+    assert.ok(sessionRunPolicy('free', 'ask').ask);
+    assert.ok(sessionRunPolicy('free', 'allowed').allowed);
+    assert.match(sessionRunPolicy('free', 'off').refuse, /turned off/);
+    assert.match(sessionRunPolicy(null, 'allowed').refuse, /only a Claude Code session/);
+    assert.match(sessionRunPolicy('free', 'allowed', { env: { [RUN_ENV]: '1' } }).refuse, /started by a sequence/);
+    noteLaunch('step-sess', { fromSession: true });
+    noteLaunch('user-step', { fromSession: false });
+    assert.match(sessionRunPolicy('step-sess', 'allowed').refuse, /started by a sequence/);
+    assert.match(sessionRunPolicy('user-step', 'allowed').refuse, /started by a sequence/, 'also steps of runs the user started');
+    assert.equal(launchesToday(), 1, 'only launches by session-started runs count to the cap');
   });
 });
 

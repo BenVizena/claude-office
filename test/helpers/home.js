@@ -10,6 +10,8 @@ export const TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-office-te
 process.env.HOME = TEST_HOME;
 process.env.USERPROFILE = TEST_HOME; // what os.homedir() reads on Windows
 delete process.env.CLAUDE_CODE_SESSION_ID;
+// git in the temp home has no identity: merges and commits in test repos need one
+Object.assign(process.env, { GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@example.com' });
 delete process.env.OFFICE_TODO_BY;
 if (path.resolve(os.homedir()) !== path.resolve(TEST_HOME) || path.resolve(TEST_HOME) === path.resolve(realHome)) {
   throw new Error(`could not isolate the home directory for tests (still ${os.homedir()})`);

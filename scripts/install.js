@@ -69,7 +69,7 @@ function installSkill() {
   const T = `node "${TODO_CLI}"`;
   fs.writeFileSync(path.join(SKILL_DIR, 'SKILL.md'), `---
 name: office-todo
-description: Read and update the shared Claude Office to-do boards (one per project plus an office-wide board) — claim items you work on, break them into subtasks, attach background, mark them done — set your status speech bubble in the office (update it when your phase of work changes; ask the user a question with --needs-you), and post results for the user to view (charts of test, benchmark, training or eval metrics — partial results too — tables, images, notes). Use when the user mentions the todo board / office todos, when the user gives you several tasks at once (a list of fixes, review findings, a multi-step plan) — put each on the board before you start — when you start or finish a task that is on the board, as soon as you notice follow-up work worth tracking (a bug, a gap, something left for later), when you run tests, benchmarks, training or experiments whose results the user will want to see, or when asked what's left to do.
+description: Read and update the shared Claude Office to-do boards (one per project plus an office-wide board) — claim items you work on, break them into subtasks, attach background, mark them done — set your status speech bubble in the office (update it when your phase of work changes; ask the user a question with --needs-you), and post results for the user to view (charts of test, benchmark, training or eval metrics — partial results too — tables, images, notes). Use when the user mentions the todo board / office todos, when the user gives you several tasks at once (a list of fixes, review findings, a multi-step plan) — put each on the board before you start — when you start or finish a task that is on the board, as soon as you notice follow-up work worth tracking (a bug, a gap, something left for later), when you run tests, benchmarks, training or experiments whose results the user will want to see, when asked to turn work into a chain of tasks and run it (one fresh session per task, in sequence or in parallel), or when asked what's left to do.
 ---
 
 # Office to-do boards
@@ -94,6 +94,7 @@ ${T} context <id> --kind code --lang ts --title "the fix" --file - < snippet.ts
 ${T} done <id>                     # finished and verified
 ${T} release <id>                  # giving it up unfinished
 ${T} block <id> "why it's blocked"
+${T} run <id> [--max N] [--parallel N]  # run the item and what waits on it, a fresh session per item (see Sequences)
 ${T} mine                          # what you have claimed
 ${T} completed [--days 7]          # recently finished
 ${T} watch <id> | unwatch <id>     # follow an item's news (items you claim or add are followed automatically)
@@ -146,6 +147,35 @@ machine-readable output, \`--by "<short label>"\` to describe yourself (e.g. "cl
   micro-steps and anything you'll finish within this task.
 - Never delete items the user created; mark them done or blocked instead.
 - If you stop working on something you claimed, \`release\` it so others can pick it up.
+
+## Sequences: a chain of items, one fresh session each
+When the user asks you to turn work into a chain and run it ("make these sequential tasks and run them"), the office
+can work through it for you: each item gets its own new session with a clean context, started only once what it
+waits on is done, verified and (in parallel runs) merged. You plan it; the office runs it; nobody's tokens are spent
+waiting.
+
+1. **Plan the items.** One item per step a fresh session can finish and verify on its own, in the order of the work.
+   Titles say what to do; put what the step needs to know (goal, files, constraints, how to tell it worked) in its
+   \`context\`, since that session starts knowing nothing else. Don't make steps so small that each one rediscovers
+   the same ground.
+2. **Link them.** Give the chain one root item (the first step, or a parent you add the steps under) and
+   \`depend\` each step on the steps it builds on. Steps that don't build on each other may share a dependency (a
+   fan-out: they can run side by side); a step that needs several earlier ones depends on all of them (a join).
+3. **Add checks** where a command can show a step worked (\`check <id> "npm test"\`): fast and specific. The user has to
+   approve checks a session sets, and a run stops at an unapproved one, so mention them to the user.
+4. **Run it:** \`${T} run <root id> [--max N] [--parallel N]\`. It covers the root, its subtasks and everything that waits
+   on them. --max caps how many sessions it starts (default 5, at most 20); keep it to the number of items unless the
+   user says otherwise. --parallel N (at most 4) runs up to N independent items at once, each in its own git worktree
+   and branch made from your current worktree and merged back into it when done and verified; use it only for
+   fan-outs whose steps don't touch the same files, and only when your worktree is committed and on a branch.
+   Depending on the user's office setting, the office starts it right away, asks the user (it waits on the board with
+   Start / Dismiss), or refuses: say which to the user. Board news tells you as items finish.
+- **If you were started by a sequence** (your prompt says "step N of up to M"), do your item only and end your turn;
+  never start sequences or other items yourself (the CLI refuses anyway). In a parallel run, commit your work on your
+  branch before \`done\`: the office won't merge uncommitted work.
+- A run stops for the user on anything but a clean, verified done (blocked, released, failed or unapproved check,
+  merge conflict, session ended). If an item you depend on should change course, \`block\` it with why instead of
+  letting the run go ahead.
 
 ## Your status (speech bubble)
 In the office you sit at a desk, and a speech bubble above your head says what you're doing. Set it yourself:

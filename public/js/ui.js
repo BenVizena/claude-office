@@ -4,7 +4,7 @@ import { ago, fmtTok } from './boards.js';
 import { ROLE_STYLE } from './character.js';
 import { overviewHtml } from './overview.js';
 import { bubbleFor } from './now-recent.js';
-import { sessionIndex, openTabHtml, completedTabHtml } from './todos-ui.js';
+import { sessionIndex, openTabHtml, completedTabHtml, sessionRunsHtml } from './todos-ui.js';
 import { treeTabHtml, treeDrag } from './todo-tree.js';
 import { newsText } from './news-text.js';
 
@@ -271,7 +271,7 @@ export class UI {
         <button role="tab" class="${tab === 'done' ? 'on' : ''}" data-tab="done">Completed · ${doneCount}</button>
       </div>
       ${tab === 'tree' ? treeTabHtml(board, v, sessions) : tab === 'open'
-        ? `<p class="sub">Agents use the <code>office-todo</code> skill to add subtasks, ✋ claim what they're working on, and attach 📎 background. Click an item to read it.</p>${openTabHtml(board, v, sessions)}`
+        ? `<p class="sub">Agents use the <code>office-todo</code> skill to add subtasks, ✋ claim what they're working on, and attach 📎 background. Click an item to read it.</p>${openTabHtml(board, v, sessions)}${!lobby ? sessionRunsHtml(state.settings?.sessionRuns) : ''}`
         : `${lobby ? `<p class="sub">${v.scope === 'board' ? 'Office-wide items only.' : 'Everything completed across all projects.'} <button class="td-link" data-scope="${v.scope === 'board' ? 'all' : 'board'}">${v.scope === 'board' ? 'Show all projects' : 'Only office-wide items'}</button></p>` : ''}
            ${completedTabHtml(doneBoards, v, sessions, lobby && v.scope !== 'board')}`}`;
   }
@@ -408,7 +408,10 @@ export class UI {
         const worktree = el?.value || el?.dataset.value;
         t.disabled = true;
         const seq = $(`[data-start-seq="${d.todoStartGo}"]`, this.body);
-        if (seq?.checked) await api('/api/todos/run', { board: v.board, id: d.todoStartGo, worktree, max: Number($(`[data-start-max="${d.todoStartGo}"]`, this.body)?.value) || 5 });
+        if (seq?.checked) {
+          await api('/api/todos/run', { board: v.board, id: d.todoStartGo, worktree, max: Number($(`[data-start-max="${d.todoStartGo}"]`, this.body)?.value) || 5,
+            parallel: Number($(`[data-start-par="${d.todoStartGo}"]`, this.body)?.value) || 1 });
+        }
         else await api('/api/todos/start', { board: v.board, id: d.todoStartGo, worktree });
         v.starting = null; this.render(false);
       }
@@ -417,6 +420,10 @@ export class UI {
       }
       else if (d.todoRunCheck) await api('/api/todos/check/run', { board: v.board, id: d.todoRunCheck });
       else if (d.todoRunStop) await api('/api/todos/run/stop', { board: v.board });
+      else if (d.todoReq) {
+        await api('/api/todos/run/request', { board: v.board, action: d.todoReq,
+          max: Number($('[data-req-max]', this.body)?.value) || undefined, parallel: Number($('[data-req-par]', this.body)?.value) || undefined });
+      }
       else if (d.todoReopen) await api('/api/todos', { board: boardOf(), action: 'update', id: d.todoReopen, patch: { status: 'todo' } });
     } catch (err) { alert(err.message); }
   }
@@ -480,7 +487,7 @@ export class UI {
       }
       return;
     }
-    const tt = e.target.closest('[data-tab],[data-group],[data-scope],[data-todo-edit],[data-todo-save],[data-todo-cancel],[data-todo-toggle],[data-todo-sub],[data-todo-addsub],[data-todo-claim],[data-todo-release],[data-todo-note],[data-todo-reopen],[data-todo-start],[data-todo-start-cancel],[data-todo-start-go],[data-todo-approve-check],[data-todo-run-check],[data-todo-run-stop]');
+    const tt = e.target.closest('[data-tab],[data-group],[data-scope],[data-todo-edit],[data-todo-save],[data-todo-cancel],[data-todo-toggle],[data-todo-sub],[data-todo-addsub],[data-todo-claim],[data-todo-release],[data-todo-note],[data-todo-reopen],[data-todo-start],[data-todo-start-cancel],[data-todo-start-go],[data-todo-approve-check],[data-todo-run-check],[data-todo-run-stop],[data-todo-req]');
     if (tt) { e.preventDefault(); await this.onTodoClick(tt); return; }
     const r = e.target.closest('[data-range]');
     if (r) { this.current.range = r.dataset.range; this.render(false); return; }
@@ -521,6 +528,7 @@ export class UI {
   async onChange(e) {
     const v = this.current;
     const t = e.target;
+    if (t.dataset.sessionRuns !== undefined) { try { await api('/api/settings', { sessionRuns: t.value }); } catch (err) { alert(err.message); } return; }
     if (t.dataset.todoDone) await api('/api/todos', { board: v.board, action: 'update', id: t.dataset.todoDone, patch: { status: t.checked ? 'done' : 'todo' } });
     if (t.dataset.ttShowdone !== undefined) { v.showDone = t.checked; this.render(false); return; }
     if (t.dataset.todoStatus) await api('/api/todos', { board: v.board, action: 'update', id: t.dataset.todoStatus, patch: { status: t.value } });

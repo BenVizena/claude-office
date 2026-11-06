@@ -38,7 +38,23 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
   for you (✋ at that session's desk) if an item is blocked, released, reopened or taken over, its session ended,
   its check failed (the item goes back to in progress, with the output attached) or isn't approved. No Claude
   session orchestrates it, so waiting costs no tokens. Finished sessions' windows stay open; close them when you
-  like. Only the office UI can start a sequence.
+  like. *Stop* starts nothing new but lets running steps finish; press it again to stop right away.
+- **Parallel sequences.** Set *at once* above 1 and items that don't wait on each other (a fan-out) run side by side,
+  up to 4. Each gets its own git worktree and branch (`.claude/worktrees/office-<id>-…`, kept out of `git status`)
+  made from the chosen worktree's HEAD; its session is told to commit there. When it is done and verified the office
+  merges the branch back into the chosen worktree and removes the worktree, and only then can what waits on it
+  start, so a join item sees every branch's work. A merge conflict, uncommitted work in the step's worktree or
+  uncommitted changes in the chosen worktree put the item back to in progress (its branch is kept) and stop new
+  starts. The chosen worktree must be on a branch. On Windows a step's folder can't be deleted while its terminal is
+  open; the office removes it once you close the window.
+- **Sessions starting sequences.** A session can plan a chain on the board and ask for it to run with
+  `office-todo run <id> [--max N] [--parallel N]` (the skill teaches how). The *Sequences* setting under a project
+  board decides: *only me* (refused), *sessions may ask* (the default: the plan waits on the board with Start /
+  Dismiss and the session's desk shows ✋) or *sessions may start them*. Sessions that a sequence started can never
+  start one, and sequences started by sessions share a daily cap of 20 sessions (`sessionRunDailyCap` in
+  `~/.claude/office/settings.json`). These are rules for well-behaved sessions, not a sandbox: a session with
+  unrestricted shell access could edit the board files or call the office's API itself, so keep approving shell
+  commands as usual.
 - **Results.** Sessions can post charts, tables, images and short notes (test runs, benchmarks, training metrics)
   with `office-todo results …`, partial results included. A small screen with a live sparkline goes up on the
   agent's desk and a "📊 View results" tab sits above its speech bubble; click either to open the results window.

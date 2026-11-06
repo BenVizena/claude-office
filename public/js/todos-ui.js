@@ -80,15 +80,61 @@ function checkChip(it, board, v) {
 export function runBannerHtml(board) {
   const r = board.run;
   if (!r) return '';
-  const cur = r.current && board.items.find((x) => x.id === r.current.id);
-  const phase = { launching: 'starting a session', working: 'working', checking: 'running its check' }[r.current?.phase] || '';
+  const active = r.active || (r.current ? [r.current] : []);
+  const phase = { launching: 'starting a session', working: 'working', checking: 'running its check', merging: 'merging its branch' };
+  const stepLine = (st) => {
+    const it = board.items.find((x) => x.id === st.id);
+    const waiting = it?.status === 'done' && st.phase === 'working';
+    return `<div class="sub">· “${esc(st.text)}”: ${waiting ? 'done, waiting for its session to finish its turn' : phase[st.phase] || st.phase}${st.branch ? ` <span class="mono" title="${esc(st.worktree)}">${esc(st.branch)}</span>` : ''}</div>`;
+  };
+  const who = r.bySession ? ` <span class="chip" title="A Claude session asked for this run">asked by ${esc(r.by)}</span>` : '';
   const head = r.stopped
     ? `<b>${r.stopped.ok ? '✓ Sequence finished' : '✋ Sequence stopped'}</b> <span class="sub">${esc(r.stopped.reason)}</span>`
-    : `<b>▶▶ Sequence from “${esc(r.rootText || r.root)}”</b> <span class="sub">step ${r.steps + (r.current ? 1 : 0)} of up to ${r.max}${cur ? ` · “${esc(cur.text)}”: ${phase}${cur.status === 'done' && r.current.phase === 'working' ? ' (done, waiting for its session to finish its turn)' : ''}` : ''}</span>`;
-  return `<div class="td-run ${r.stopped ? (r.stopped.ok ? 'ok' : 'stopped') : 'running'}">
-      <div class="td-run-head">${head}<span class="spacer"></span>
-        <button class="${r.stopped ? 'ghost' : ''}" data-todo-run-stop="1" title="${r.stopped ? 'Clear this off the board' : "Don't start anything else (the current session keeps going)"}">${r.stopped ? 'Dismiss' : 'Stop'}</button></div>
+    : r.stopping
+      ? `<b>⏸ Sequence stopping</b> <span class="sub">${esc(r.stopping.reason)}: nothing new starts; ${active.length} running step${active.length === 1 ? '' : 's'} finish${active.length === 1 ? 'es' : ''} first</span>`
+      : `<b>▶▶ Sequence from “${esc(r.rootText || r.root)}”</b> <span class="sub">${r.launched ?? r.steps} of up to ${r.max} sessions started${(r.parallel || 1) > 1 ? `, up to ${r.parallel} at once` : ''} · ${r.steps} done</span>`;
+  const stopTitle = r.stopped ? 'Clear this off the board' : r.stopping || !active.length ? 'Stop now (running sessions keep going; their worktrees are kept)' : "Don't start anything else; running steps are still checked and merged";
+  return `<div class="td-run ${r.stopped ? (r.stopped.ok ? 'ok' : 'stopped') : r.stopping ? 'stopped' : 'running'}">
+      <div class="td-run-head">${head}${who}<span class="spacer"></span>
+        <button class="${r.stopped ? 'ghost' : ''}" data-todo-run-stop="1" title="${stopTitle}">${r.stopped ? 'Dismiss' : r.stopping ? 'Stop now' : 'Stop'}</button></div>
+      ${r.stopped ? '' : active.map(stepLine).join('')}
       <details><summary class="sub">log</summary>${(r.log || []).slice().reverse().map((l) => `<div class="sub">${new Date(l.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} · ${esc(l.text)}</div>`).join('')}</details>
+    </div>`;
+}
+
+/** A session asked for a sequence (setting "ask me"): what it would run, with Start / Dismiss. */
+export function runRequestHtml(board) {
+  const q = board.runRequest;
+  if (!q) return '';
+  const scopeIds = new Set([q.root]);
+  for (let grew = true; grew;) { // the run's scope: the item, its subtasks, what waits on them (as chain.js scopeOf)
+    grew = false;
+    for (const it of board.items) {
+      if (!scopeIds.has(it.id) && ((it.parent && scopeIds.has(it.parent)) || (it.blockedBy || []).some((d) => scopeIds.has(d)))) { scopeIds.add(it.id); grew = true; }
+    }
+  }
+  const items = board.items.filter((x) => scopeIds.has(x.id) && x.status !== 'done');
+  const unapproved = items.filter((x) => x.check && !x.check.approved);
+  return `<div class="td-run request">
+      <div class="td-run-head"><b>✋ ${esc(q.by)} asks to run a sequence</b><span class="sub">from “${esc(q.rootText)}” in <span class="mono">${esc(q.worktree)}</span></span></div>
+      ${items.map((x) => `<div class="sub">· ${esc(x.text)}${x.check ? ` <code>${esc(x.check.cmd)}</code>${x.check.approved ? '' : ' (check not approved)'}` : ''}</div>`).join('')}
+      ${unapproved.length ? `<div class="sub">It stops at ${unapproved.length === 1 ? 'the item' : 'items'} with an unapproved check until you approve ${unapproved.length === 1 ? 'it' : 'them'}.</div>` : ''}
+      <div class="td-run-head">
+        <label class="sub">up to <input type="number" data-req-max value="${q.max}" min="1" max="20" style="width:3.5em" /> sessions,</label>
+        <label class="sub" title="More than 1: each item gets its own worktree and branch, merged into ${esc(q.worktree)} when it is done and verified">
+          <input type="number" data-req-par value="${q.parallel || 1}" min="1" max="4" style="width:3em" /> at once</label>
+        <span class="spacer"></span>
+        <button class="ghost" data-todo-req="dismiss">Dismiss</button>
+        <button class="primary" data-todo-req="start">Start</button>
+      </div>
+    </div>`;
+}
+
+/** Who may start sequences: the office-wide setting, shown under the board. */
+export function sessionRunsHtml(mode) {
+  const opts = { off: 'only me', ask: 'sessions may ask (I approve)', allowed: 'sessions may start them' };
+  return `<div class="td-policy sub" title="Sessions started by a sequence can never start one. Sequences started by sessions share a daily cap on sessions.">
+      Sequences: <select data-session-runs>${Object.entries(opts).map(([k, l]) => `<option value="${k}" ${k === (mode || 'ask') ? 'selected' : ''}>${l}</option>`).join('')}</select>
     </div>`;
 }
 
@@ -104,7 +150,8 @@ function startRow(it, v, depth) {
       <span class="sub">It opens in a terminal window with the item claimed; you approve its permissions there as usual.</span>
       ${v.runActive ? '<span class="sub">(A sequence is already running on this board.)</span>' : `<label class="sub" title="When this is done, verified and its session's turn is over, the office starts the next ready item that waits on it (or its next subtask) in a new session. It stops on anything else: blocked, released, a failed or unapproved check, or the cap.">
         <input type="checkbox" data-start-seq="${it.id}" /> then keep going: start what waits on it, one at a time, up to
-        <input type="number" data-start-max="${it.id}" value="5" min="1" max="20" style="width:3.5em" /> steps</label>`}
+        <input type="number" data-start-max="${it.id}" value="5" min="1" max="20" style="width:3.5em" /> sessions,
+        <input type="number" data-start-par="${it.id}" value="1" min="1" max="4" style="width:3em" title="More than 1 runs items that don't wait on each other side by side, each in its own worktree and branch, merged into this worktree when done and verified (it must be on a branch and have no uncommitted changes when merging)" /> at once</label>`}
       <button class="ghost" data-todo-start-cancel="${it.id}">Cancel</button>
       <button class="primary" data-todo-start-go="${it.id}">Start</button>
     </div>`;
@@ -147,7 +194,7 @@ export function openTabHtml(board, v, sessions) {
   // roots still open (or with open subtasks)
   const hasOpen = (it) => it.status !== 'done' || kids(board, it.id).some(hasOpen);
   const roots = sortSibs(board.items.filter((it) => (!it.parent || !board.items.some((x) => x.id === it.parent)) && hasOpen(it)));
-  return `${runBannerHtml(board)}<div class="add-row"><input type="text" data-keep="todo" placeholder="Add a to-do…" /><button class="primary" data-todo-add>Add</button></div>
+  return `${runRequestHtml(board)}${runBannerHtml(board)}<div class="add-row"><input type="text" data-keep="todo" placeholder="Add a to-do…" /><button class="primary" data-todo-add>Add</button></div>
     <div class="td-list">${roots.map((it) => itemRow(it, board, v, sessions, 0)).join('') || '<p class="sub">Nothing open. 🎉</p>'}</div>`;
 }
 

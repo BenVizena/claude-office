@@ -9,6 +9,7 @@ import path from 'node:path';
 import { STAFF_DIR, REPO_DIR, claudeCommand, normPath } from './config.js';
 import { claimItem, releaseItem, readBoard, claimIsStale, recordLaunch } from './todos.js';
 import { subscribe } from './news.js';
+import { RUN_ENV } from './runpolicy.js';
 
 const LAUNCH_DIR = path.join(STAFF_DIR, '..', 'launch');
 const CLI = path.join(REPO_DIR, 'bin', 'office-todo.js').replace(/\\/g, '/');
@@ -30,15 +31,21 @@ function promptFor(board, id, step) {
     + '- start it again whenever it finishes and says you still follow items. If your claim is taken over, stop and check with `show`. '
     + 'If the item still waits on other items (show marks them "waits on"), do not work around them: set your status to waiting '
     + 'and end your turn; the watcher wakes you when they are done.'
-    + (step ? ` This is step ${step.n} of up to ${step.max} in a sequence the user started from the board. Do only this item: once it `
+    + (step ? ` This is step ${step.n} of up to ${step.max} in a sequence started from the board. Do only this item: once it `
       + 'is done (handoff notes left), end your turn and stop. The office then runs its check and starts the next item in a new '
-      + 'session, so do not start other items yourself.' : '');
+      + 'session, so do not start other items or sequences yourself.' : '')
+    + (step?.branch ? ` You are in your own git worktree (${step.branch.worktree}) on branch ${step.branch.branch}, made for this item `
+      + `from ${step.branch.baseBranch}; other items of the sequence may be running in parallel in their own worktrees. Work only in `
+      + 'this folder and COMMIT your work on this branch before you mark the item done: the office merges the branch into '
+      + `${step.branch.baseBranch} once its check passes, and refuses if anything is left uncommitted. Do not merge, rebase or push it yourself.` : '');
 }
 
 /** Throws with a readable message when the item can't be started. Returns { session, worktree }. */
 export function startOnItem({ room, id, worktree, claudePath, step }) {
   if (room?.kind !== 'project') throw new Error('sessions can only be started on a project board');
-  const pod = room.pods.find((p) => !p.removed && normPath(p.path) === normPath(worktree));
+  // a parallel sequence step runs in a worktree the office just made inside one of the project's worktrees
+  const inside = step?.branch && room.pods.some((p) => !p.removed && normPath(worktree).startsWith(`${normPath(p.path)}/`));
+  const pod = inside ? { path: worktree } : room.pods.find((p) => !p.removed && normPath(p.path) === normPath(worktree));
   if (!pod) throw new Error('that worktree is not part of this project');
   if (!fs.existsSync(pod.path)) throw new Error(`${pod.path} no longer exists`);
   const it = readBoard(room.key).items.find((x) => x.id === id);
@@ -54,7 +61,7 @@ export function startOnItem({ room, id, worktree, claudePath, step }) {
   try { subscribe(session, readBoard(room.key), id, 'claim'); } catch { /* the office subscribes it on its first hook */ }
   try { recordLaunch(room.key, id, { session, worktree: pod.path }); } catch { /* only used to pick where its check runs */ }
   try {
-    openTerminal({ cwd: pod.path, claudePath, args: ['--session-id', session, promptFor(room.key, id, step)], title: `Claude: ${room.name} ${id}${step ? ` (step ${step.n})` : ''}`, session });
+    openTerminal({ cwd: pod.path, claudePath, args: ['--session-id', session, promptFor(room.key, id, step)], title: `Claude: ${room.name} ${id}${step ? ` (step ${step.n})` : ''}`, session, env: step ? { [RUN_ENV]: '1' } : {} });
   } catch (e) {
     releaseItem(room.key, id, { by: 'office' });
     throw e;
@@ -68,7 +75,7 @@ export function startOnItem({ room, id, worktree, claudePath, step }) {
 const cmdQuote = (s) => `"${String(s).replace(/%/g, '%%').replace(/"/g, '""')}"`;
 const shQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
-function openTerminal({ cwd, claudePath, args, title, session }) {
+function openTerminal({ cwd, claudePath, args, title, session, env = {} }) {
   fs.mkdirSync(LAUNCH_DIR, { recursive: true });
   cleanOldLaunchers();
   const [cmd, pre] = claudeCommand(claudePath);
@@ -76,6 +83,7 @@ function openTerminal({ cwd, claudePath, args, title, session }) {
   if (process.platform === 'win32') {
     const file = path.join(LAUNCH_DIR, `${session}.cmd`);
     fs.writeFileSync(file, ['@echo off', `title ${title.replace(/[^\w .:-]/g, '')}`, `cd /d ${cmdQuote(cwd)}`,
+      ...Object.entries(env).map(([k, v]) => `set "${k}=${String(v).replace(/["%]/g, '')}"`),
       argv.map(cmdQuote).join(' '), ''].join('\r\n'));
     // `start` gives it its own console window; the launcher path is ours, so verbatim arguments are safe here
     const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `start "Claude" "${file}"`],
@@ -85,7 +93,8 @@ function openTerminal({ cwd, claudePath, args, title, session }) {
     return;
   }
   const file = path.join(LAUNCH_DIR, `${session}.command`);
-  fs.writeFileSync(file, `#!/bin/sh\ncd ${shQuote(cwd)} || exit 1\nexec ${argv.map(shQuote).join(' ')}\n`, { mode: 0o755 });
+  const exports = Object.entries(env).map(([k, v]) => `export ${k}=${shQuote(v)}\n`).join('');
+  fs.writeFileSync(file, `#!/bin/sh\ncd ${shQuote(cwd)} || exit 1\n${exports}exec ${argv.map(shQuote).join(' ')}\n`, { mode: 0o755 });
   if (process.platform === 'darwin') {
     spawn('open', ['-a', 'Terminal', file], { detached: true, stdio: 'ignore' }).unref();
     return;

@@ -178,3 +178,34 @@ describe('check commands', () => {
     assert.equal(readBoard(BOARD).items.find((x) => x.id === it.id).check, undefined);
   });
 });
+
+describe('office-todo run', () => {
+  const settingsFile = path.join(TEST_HOME, '.claude', 'office', 'settings.json');
+  const setMode = (m) => {
+    const cur = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, 'utf8')) : {};
+    fs.writeFileSync(settingsFile, JSON.stringify({ ...cur, sessionRuns: m }));
+  };
+  test('asks the user by default, and shows what it would run', () => {
+    setMode('ask');
+    const a = json(b('add', 'Seq one')), c = json(b('add', 'Seq two'));
+    ok(b('depend', c.id, '--on', a.id));
+    const out = ok(b('run', a.id, '--max', '3', '--parallel', '2'), { session: 'asker' });
+    assert.match(out, /2 open items in scope, up to 3 sessions, 2 at once/);
+    assert.match(out, /approves it on the board/);
+    const req = readBoard(BOARD).runRequest;
+    assert.equal(req.root, a.id);
+    assert.equal(req.bySession, 'asker');
+    assert.match(readStatus('asker').needsYou, /Start the sequence on "Seq one"/);
+    assert.match(run(b('run', a.id), { session: 'someone-else' }).err, /already asked/);
+  });
+  test('refuses when the setting is off, outside a session, and in a session a sequence started', () => {
+    const a = json(b('add', 'Seq three'));
+    setMode('off');
+    assert.match(run(b('run', a.id), { session: 'x1' }).err, /turned off sessions starting sequences/);
+    setMode('allowed');
+    assert.match(run(b('run', a.id), { session: null }).err, /only a Claude Code session/);
+    const r = spawnSync(process.execPath, [CLI, 'run', a.id, '--project', BOARD], { cwd: TEST_HOME, encoding: 'utf8', env: childEnv({ CLAUDE_CODE_SESSION_ID: 'step-x', CLAUDE_OFFICE_RUN: '1' }) });
+    assert.match(r.stderr, /started by a sequence/);
+    setMode('ask');
+  });
+});

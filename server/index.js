@@ -10,7 +10,9 @@ import { Catalog, DecorStore } from './decor.js';
 import { Staff } from './staff.js';
 import { addItem, updateItem, removeItem, claimItem, releaseItem, addDetail, readDetails, listBoards, moveItem, addDependency, removeDependency, markSessionClaims, setCheck, approveCheck, recordCheck, readBoard } from './todos.js';
 import { runCheck, checkDir } from './checks.js';
-import { startRun, stopRun, makeRunner } from './chain.js';
+import { startRun, stopRun, makeRunner, dropRequest } from './chain.js';
+import * as gitwork from './gitwork.js';
+import { noteLaunch, launchesToday, sessionRunPolicy } from './runpolicy.js';
 import { setStatus } from './status.js';
 import { boardNews } from './nudges.js';
 import { ack as ackNews, markEnded as markNewsEnded, scanAll } from './news.js';
@@ -41,10 +43,11 @@ async function rebuild() {
   try {
     state = await buildOffice({ scanner, settings, hooks, decor, catalog, staff });
     const boards = listBoards();
-    state.todoBoards = boards.map((bd) => ({ id: bd.id, name: bd.name, items: bd.items, run: bd.run || null }));
+    state.todoBoards = boards.map((bd) => ({ id: bd.id, name: bd.name, items: bd.items, run: bd.run || null, runRequest: bd.runRequest || null }));
     state.checksRunning = [...checksRunning];
     attachNews(state, boards);
-    state.settings = { soundHint: true, showBackgroundSessions: settings.showBackgroundSessions, blender: !!resolveBlender(settings) };
+    state.settings = { soundHint: true, showBackgroundSessions: settings.showBackgroundSessions, blender: !!resolveBlender(settings),
+      sessionRuns: settings.sessionRuns, sessionRunDailyCap: settings.sessionRunDailyCap };
     broadcast({ type: 'state', state });
   } catch (e) {
     console.error('rebuild failed:', e);
@@ -60,13 +63,51 @@ function attachNews(st, boards) {
 
 // ---- sequences ("run in sequence" from the board, see chain.js) ----
 const checksRunning = new Set(); // "board:id" of checks the user started by hand
+const notify = (session, st) => { try { setStatus(session, { ...st, mood: st.needsYou ? '✋' : '🎉' }); } catch { /* best effort */ } };
+/** The project worktree a path is in (a session's cwd may be a subfolder), or null. */
+function podFor(room, dir) {
+  const d = normPath(String(dir || ''));
+  return room?.pods.filter((p) => !p.removed && (d === normPath(p.path) || d.startsWith(`${normPath(p.path)}/`)))
+    .sort((a, b) => b.path.length - a.path.length)[0] || null;
+}
+/** A session's request for a run (office-todo run): start it, keep it for the user, or drop it, per settings.sessionRuns. */
+async function handleRequest(slug) {
+  const bd = readBoard(slug);
+  const req = bd.runRequest;
+  if (!req) return;
+  const policy = sessionRunPolicy(req.bySession, settings.sessionRuns);
+  if (policy.ask) return; // shown on the board for the user
+  const room = findRoom(slug);
+  const pod = podFor(room, req.worktree);
+  if (policy.refuse || !pod) {
+    await whenUnlocked(() => dropRequest(slug));
+    notify(req.bySession, { text: 'Sequence request turned down', needsYou: policy.refuse || `${req.worktree} is not a worktree of this project` });
+    return;
+  }
+  try {
+    await whenUnlocked(() => startRun(slug, { root: req.root, worktree: pod.path, max: req.max, parallel: req.parallel, by: req.by, bySession: req.bySession }));
+    notify(req.bySession, { text: `Sequence started on "${req.rootText}" (sessions may start sequences)` });
+  } catch (e) {
+    await whenUnlocked(() => dropRequest(slug));
+    notify(req.bySession, { text: 'Sequence request failed', needsYou: e.message });
+  }
+}
 const runSequences = makeRunner(
-  () => listBoards().filter((bd) => bd.run && !bd.run.stopped).map((bd) => bd.id),
+  () => listBoards().filter((bd) => (bd.run && !bd.run.stopped) || bd.runRequest || bd.leftovers?.length).map((bd) => bd.id),
   {
     hookOf: (session) => hooks.get(session),
-    launch: ({ slug, id, worktree, step, max }) => whenUnlocked(() => startOnItem({ room: findRoom(slug), id, worktree, claudePath: settings.claudePath, step: { n: step, max } })),
+    launch: async ({ slug, id, worktree, step, max, run, branch }) => {
+      const r = await whenUnlocked(() => startOnItem({ room: findRoom(slug), id, worktree, claudePath: settings.claudePath, step: { n: step, max, branch } }));
+      await whenUnlocked(() => noteLaunch(r.session, { fromSession: !!run.bySession, board: slug, item: id })).catch((e) => console.error('run log:', e.message));
+      return r;
+    },
+    // sequences a session started share a daily launch cap (the user's own runs don't count)
+    canLaunch: (run) => (run.bySession && launchesToday() >= settings.sessionRunDailyCap
+      ? `sequences started by sessions reached today's cap of ${settings.sessionRunDailyCap} sessions (office setting)` : null),
     runCheck: (cmd, cwd) => runCheck(cmd, cwd),
-    notify: (session, st) => setStatus(session, { ...st, mood: st.needsYou ? '✋' : '🎉' }),
+    git: gitwork,
+    notify,
+    onRequest: (slug) => handleRequest(slug),
     changed: () => markDirty(),
   },
 );
@@ -228,10 +269,28 @@ const routes = {
     if (room?.kind !== 'project') throw new Error('sequences run on project boards');
     const pod = room.pods.find((p) => !p.removed && normPath(p.path) === normPath(String(b.worktree || '')));
     if (!pod) throw new Error('that worktree is not part of this project');
-    const r = await whenUnlocked(() => startRun(room.key, { root: String(b.id), worktree: pod.path, max: b.max }));
+    const r = await whenUnlocked(() => startRun(room.key, { root: String(b.id), worktree: pod.path, max: b.max, parallel: b.parallel }));
     markDirty();
     setTimeout(runSequences, 50);
     return r;
+  },
+  // a session's request (settings.sessionRuns = ask): the user starts it as asked (or with their own numbers) or dismisses it
+  'POST /api/todos/run/request': async (b) => {
+    const slug = String(b.board);
+    const req = readBoard(slug).runRequest;
+    if (!req) throw new Error('that request is gone');
+    if (b.action === 'dismiss') {
+      await whenUnlocked(() => dropRequest(slug));
+      notify(req.bySession, { text: 'The user dismissed the sequence request' });
+    } else {
+      const pod = podFor(findRoom(slug), req.worktree);
+      if (!pod) throw new Error(`${req.worktree} is not a worktree of this project any more`);
+      await whenUnlocked(() => startRun(slug, { root: req.root, worktree: pod.path, max: b.max ?? req.max, parallel: b.parallel ?? req.parallel, by: `${req.by} (you approved)`, bySession: req.bySession }));
+      notify(req.bySession, { text: `The user started the sequence on "${req.rootText}"` });
+      setTimeout(runSequences, 50);
+    }
+    markDirty();
+    return { ok: true };
   },
   'POST /api/todos/run/stop': async (b) => { const r = await whenUnlocked(() => stopRun(String(b.board))); markDirty(); return r || { ok: true }; },
 
@@ -298,6 +357,11 @@ const routes = {
   'POST /api/settings': async (b) => {
     const allowed = ['showBackgroundSessions', 'roomMaxAgeDays', 'sessionMaxAgeDays', 'chatModel', 'decorModel', 'hiddenProjects', 'pinnedProjects'];
     for (const k of allowed) if (b[k] !== undefined) settings[k] = b[k];
+    if (b.sessionRuns !== undefined) {
+      if (!['off', 'ask', 'allowed'].includes(b.sessionRuns)) throw new Error('sessionRuns is off, ask or allowed');
+      settings.sessionRuns = b.sessionRuns;
+    }
+    if (b.sessionRunDailyCap !== undefined) settings.sessionRunDailyCap = Math.max(1, Math.min(200, Math.floor(Number(b.sessionRunDailyCap)) || 20));
     saveSettings(settings);
     settings = loadSettings();
     markDirty();

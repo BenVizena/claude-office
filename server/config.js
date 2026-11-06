@@ -46,6 +46,10 @@ const DEFAULT_SETTINGS = {
   decorModel: 'sonnet',
   blenderPath: '',             // empty = find it automatically (re-checked, so installing Blender later just works)
   claudePath: findClaude(),
+  // may a Claude session start a sequence of sessions (office-todo run)? 'off' | 'ask' (the user approves each on the
+  // board) | 'allowed'. Sessions a sequence started can never start one, whatever this says.
+  sessionRuns: 'ask',
+  sessionRunDailyCap: 20,      // sessions that sequences started by sessions may launch in 24 h, across the office
 };
 
 /** First existing file among candidates, else null. */

@@ -14,6 +14,8 @@
 //   move <id> --parent <id> | --root   re-parent an existing item (keeps its id, claim and background)
 //        [--before <id> | --after <id>]  ...and/or place it next to a sibling
 //   check <id> "npm test" | --clear  a command that verifies it is done (the user approves it before the office runs it)
+//   run <id> [--max N] [--parallel N]  ask the office to run the item and what waits on it, one session per item
+//                                     (it starts it or asks the user, as the office setting says)
 //   depend <id> --on <id>             <id> can't start until the other is done (marks it blocked meanwhile)
 //   undepend <id> --on <id>           remove that dependency
 //   edit <id> [--text "new title"] [--priority low|normal|high] [--summary "one line of context" | --summary ""]
@@ -30,7 +32,9 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import { projectSlug } from '../server/config.js';
+import { projectSlug, loadSettings } from '../server/config.js';
+import { requestRun } from '../server/chain.js';
+import { sessionRunPolicy } from '../server/runpolicy.js';
 import { setStatus, clearStatus, readStatus } from '../server/status.js';
 import {
   readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, moveItem, addDependency, removeDependency, openBlockers, claimIsStale, dependents, setCheck,
@@ -400,6 +404,27 @@ ${d.text}`);
       console.log(r.check
         ? `check for "${r.text}": ${r.check.cmd}\nRun it yourself before \`done\`. The office only runs it (before starting what depends on this) once the user approves it in the office.`
         : `"${r.text}" has no check now`);
+      break;
+    }
+    case 'run': {
+      need();
+      const policy = sessionRunPolicy(session, loadSettings().sessionRuns, { env: process.env });
+      if (policy.refuse) throw new Error(`can't start a sequence: ${policy.refuse}`);
+      let here = process.cwd();
+      try { here = execFileSync('git', ['rev-parse', '--show-toplevel'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { /* not a repo: the office refuses it */ }
+      const r = requestRun(slug, { root: id, worktree: here, max: flags.max, parallel: flags.parallel, by, bySession: session });
+      const b = readBoard(slug);
+      const items = r.scope.map((x) => b.items.find((i) => i.id === x)).filter((i) => i && i.status !== 'done');
+      if (flags.json) { print({ ...r, mode: policy.ask ? 'ask' : 'allowed' }); break; }
+      console.log(`sequence on "${r.rootText}": ${items.length} open item${items.length === 1 ? '' : 's'} in scope, up to ${r.max} session${r.max > 1 ? 's' : ''}`
+        + `${r.parallel > 1 ? `, ${r.parallel} at once (each in its own worktree and branch, merged into this worktree)` : ', one at a time'}, in ${here}`);
+      console.log(tree(b, items));
+      const unchecked = items.filter((i) => !i.check?.approved);
+      if (unchecked.some((i) => i.check)) console.log(`\nnote: ${unchecked.filter((i) => i.check).map((i) => i.id).join(', ')} have checks the user hasn't approved: the run stops there until they do.`);
+      if (policy.ask) {
+        try { setStatus(session, { text: `Asked to run "${r.rootText}" in sequence`, needsYou: `Start the sequence on "${r.rootText}" (${items.length} items)? It's waiting on the board.` }); } catch { /* best effort */ }
+        console.log('\nThe user approves it on the board (it shows there with Start / Dismiss). Board news tells you as items finish: run `wait` in the background if you want to hear.');
+      } else console.log('\nThe office starts it within a few seconds (the user lets sessions start sequences). Board news tells you as items finish.');
       break;
     }
     case 'depend': case 'undepend': {
