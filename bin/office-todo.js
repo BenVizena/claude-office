@@ -21,6 +21,10 @@
 //   boards                            every board with open counts
 //   results ...                       charts/tables/images/notes the user can view in the office
 //                                     (`office-todo results help` for the subcommands)
+//   watch <id> | unwatch <id>         follow an item's news (claimed and added items are followed automatically)
+//   following                         the items this session follows
+//   wait                              run in the background: exits when an item you follow is unblocked, finished by
+//                                     someone else or your claim is taken over, printing what happened
 // Flags: --project <path|board-id>  --global (office-wide board)  --json  --by "<who>"
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -28,8 +32,9 @@ import fs from 'node:fs';
 import { projectSlug } from '../server/config.js';
 import { setStatus, clearStatus, readStatus } from '../server/status.js';
 import {
-  readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, moveItem, addDependency, removeDependency, openBlockers,
+  readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, moveItem, addDependency, removeDependency, openBlockers, claimIsStale,
 } from '../server/todos.js';
+import { subscribe, unsubscribe, scan, ack, subCount } from '../server/news.js';
 import {
   logPoint, addData, watchFile, addImage, addNote, removeChart, removeRun, listRuns, runSummary, readRun, defaultRunId, slugify,
 } from '../server/results.js';
@@ -93,7 +98,7 @@ function line(it, board, indent = '') {
   const kids = children(board, it.id);
   const prog = kids.length ? ` (${kids.filter((k) => k.status === 'done').length}/${kids.length} subtasks)` : '';
   const pri = it.priority && it.priority !== 'normal' ? ` [${it.priority}]` : '';
-  const claim = it.claim ? `  ← claimed by ${it.claim.session === session && session ? 'you' : it.claim.by}${it.claim.ended ? ' (session ended — free to take over)' : ''}` : '';
+  const claim = it.claim ? `  ← claimed by ${it.claim.session === session && session ? 'you' : it.claim.by}${it.claim.ended ? ' (session ended — free to take over)' : it.claim.pending ? (claimIsStale(it.claim) ? ' (its session never started — free to take over)' : ' (session starting…)') : ''}` : '';
   const note = (it.summary ? `\n${indent}      ${it.summary}` : '') + (it.note ? `\n${indent}      note: ${it.note}` : '');
   const waits = board.items?.length ? openBlockers(board, it) : [];
   const dep = waits.length ? `  ⛔ waits on ${waits.map((w) => w.id).join(', ')}` : '';
@@ -109,6 +114,47 @@ function tree(board, items) {
   };
   for (const it of items) if (!it.parent || !ids.has(it.parent)) walk(it, 0);
   return out.join('\n') || '(empty)';
+}
+
+/** Follow an item this session just claimed or added (best effort: the claim or add itself already succeeded). */
+function follow(slug, itemId, reason) {
+  if (!session) return;
+  try { subscribe(session, readBoard(slug), itemId, reason); } catch { /* the office picks it up on its next scan */ }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const WAIT_POLL_MS = 3000, WAIT_SETTLE_MS = 3000, WAIT_MAX_MS = 24 * 3600000;
+
+/**
+ * `office-todo wait`, meant to run in the background: checks this session's subscriptions every few seconds (no model
+ * tokens), and exits only when something worth waking the session for happened, printing it. Exiting is what wakes
+ * the session, so it never exits on a timer short of a day, and waits a moment after the first event to bundle a burst.
+ */
+async function waitForNews() {
+  if (!session) throw new Error('wait needs a Claude Code session (run it from inside Claude Code, in the background)');
+  const started = Date.now();
+  const check = () => { try { return scan(session); } catch { return null; } }; // lock busy: try again next round
+  for (;;) {
+    let rec = check();
+    if (rec && rec.outbox.some((e) => e.wake)) {
+      await sleep(WAIT_SETTLE_MS);
+      rec = check() || rec;
+      const events = rec.outbox;
+      console.log(`[Claude Office to-do board]\n${events.map((e) => `- ${e.text}`).join('\n')}`);
+      ack(session, events[events.length - 1].id);
+      const n = subCount(rec);
+      console.log(n
+        ? `\nYou still follow ${n} item${n === 1 ? '' : 's'}: start \`office-todo wait\` again in the background to keep listening.`
+        : "\nYou don't follow any items any more: no need to start the watcher again.");
+      return;
+    }
+    if (rec && !subCount(rec)) {
+      console.log("You don't follow any items (claim, add or `watch` one first), so there is nothing to wait for.");
+      return;
+    }
+    if (Date.now() - started > WAIT_MAX_MS) { console.log('Stopped waiting after 24 hours with no news.'); return; }
+    await sleep(WAIT_POLL_MS);
+  }
 }
 
 function print(x, board) {
@@ -243,7 +289,12 @@ try {
         console.log(`${b.id.padEnd(32)} ${String(open).padStart(3)} open ${String(claimed).padStart(3)} claimed   ${b.name || ''}`);
       }
       break;
-    case 'add': print(addItem(slug, meta, { text: rest.join(' '), by, session, priority: flags.priority || 'normal', parent: flags.parent, summary: flags.summary })); break;
+    case 'add': {
+      const r = addItem(slug, meta, { text: rest.join(' '), by, session, priority: flags.priority || 'normal', parent: flags.parent, summary: flags.summary });
+      follow(slug, r.id, 'created');
+      print(r);
+      break;
+    }
     case 'edit': {
       need();
       const patch = { by };
@@ -254,7 +305,41 @@ try {
       print(updateItem(slug, id, patch), readBoard(slug));
       break;
     }
-    case 'claim': case 'start': need(); print(claimItem(slug, id, { by, session, force: !!flags.force }), readBoard(slug)); break;
+    case 'claim': case 'start': {
+      need();
+      const r = claimItem(slug, id, { by, session, force: !!flags.force });
+      follow(slug, r.id, 'claim'); // from this moment: news about it can't be missed
+      print(r, readBoard(slug));
+      break;
+    }
+    case 'watch': case 'unwatch': {
+      need();
+      if (!session) throw new Error('watching needs a Claude Code session (run it from inside Claude Code)');
+      const b = readBoard(slug);
+      const it = b.items.find((x) => x.id === id) || b.items.find((x) => x.id.startsWith(id));
+      if (!it) throw new Error(`no item ${id}`);
+      if (cmd === 'watch') {
+        if (it.status === 'done') throw new Error(`"${it.text}" is already done`);
+        subscribe(session, b, it.id, 'watch');
+        console.log(`following "${it.text}": you'll hear when it is unblocked or finished (on your next prompt, or from office-todo wait)`);
+      } else console.log(unsubscribe(session, slug, it.id) ? `no longer following "${it.text}"` : `you weren't following "${it.text}" (it won't be picked up automatically now)`);
+      break;
+    }
+    case 'following': {
+      if (!session) throw new Error('needs a Claude Code session (run it from inside Claude Code)');
+      const rec = scan(session);
+      const subs = Object.values(rec.subs);
+      if (flags.json) { print({ following: subs, pending: rec.outbox }); break; }
+      if (!subs.length) console.log('You are not following any items.');
+      const boards = new Map(listBoards().map((b) => [b.id, b]));
+      for (const s of subs) {
+        const it = boards.get(s.board)?.items.find((x) => x.id === s.id);
+        console.log(`${s.id}  ${it ? it.text : '(gone)'}  — ${s.reasons.join(', ')}${s.board !== slug ? ` (board ${s.board})` : ''}`);
+      }
+      if (rec.outbox.length) console.log(`\nnews not delivered yet:\n${rec.outbox.map((e) => `- ${e.text}`).join('\n')}`);
+      break;
+    }
+    case 'wait': await waitForNews(); break;
     case 'context': {
       need();
       let text = rest.slice(1).join(' ');

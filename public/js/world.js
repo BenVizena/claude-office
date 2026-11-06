@@ -14,11 +14,13 @@ import { bubbleFor } from './now-recent.js';
 import {
   drawProjectBoard, drawBranchBoard, drawTodoBoard, drawOfficeBoard, drawApprovalBoard, drawUsageBoard, drawEfficiencyBoard, drawCompletedBoard,
 } from './boards.js';
+import { newsText } from './news-text.js';
 
 const STATUS_RANK = { needs_you: 0, working: 1, compacting: 2, idle: 3, away: 4, gone: 5 };
 
 const BUBBLE_MS = 5000; // how long a bubble stays up after you walk up or its status changes
 const FRESH_RESULTS_MS = 5 * 60000; // results this new get a "📊 New results" tag even while the bubble is down
+const clipText = (t, n) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
 const openResults = (s) => dispatchEvent(new CustomEvent('office:open-results', { detail: { board: s.results.board, session: s.id, run: s.results.latest } }));
 
 function label(className, html) {
@@ -368,7 +370,12 @@ export class World {
         chip.position.set(0, 2.0, 0); chip.visible = false;
         chip.element.addEventListener('click', (e) => { e.stopPropagation(); if (a.session?.results) openResults(a.session); });
         person.root.add(chip);
-        a = { person, role: s.role, tag, alert, chip, interns: [], bot: null };
+        // ...and so does board news waiting for the session
+        const newsChip = label('news-chip', '');
+        newsChip.position.set(0, 2.0, 0); newsChip.visible = false;
+        newsChip.element.addEventListener('click', (e) => { e.stopPropagation(); dispatchEvent(new CustomEvent('office:open-session', { detail: id })); });
+        person.root.add(newsChip);
+        a = { person, role: s.role, tag, alert, chip, newsChip, interns: [], bot: null };
         pv.group.add(person.root);
         pv.agents.set(id, a);
         if (this.prevStatus.size) events.push({ type: 'arrive', session: s });
@@ -376,15 +383,19 @@ export class World {
       a.session = s;
       a.seat = pv.seats.get(id);
       const b = bubbleFor(s);
+      const news = s.status !== 'gone' ? s.news || [] : [];
+      const newsHtml = news.length ? esc(clipText(newsText(news[0]), 60)) + (news.length > 1 ? ` <span>+${news.length - 1}</span>` : '') : '';
+      if (a.newsHtml !== newsHtml) { a.newsChip.element.innerHTML = newsHtml; a.newsHtml = newsHtml; }
       const html = `<div class="b-who">${esc(s.title)} <span class="role">· ${esc(s.role)}</span></div>
         <div class="b-say">${b.mood ? `<span class="b-mood">${esc(b.mood)}</span> ` : ''}${esc(b.text)}${b.idle ? ` <span class="b-idle">(${b.idle})</span>` : ''}</div>
         ${b.asking ? `<div class="b-ask">❓ ${esc(b.asking)}</div>` : ''}
+        ${news.slice(0, 2).map((n) => `<div class="b-news">${esc(clipText(newsText(n), 90))}</div>`).join('')}${news.length > 2 ? `<div class="b-news more">+${news.length - 2} more</div>` : ''}
         ${s.results ? `<div class="b-results" title="Open the charts and results this session posted">📊 View results <span>· ${s.results.charts}</span></div>` : ''}`;
       if (a.bubbleHtml !== html) { a.tag.element.innerHTML = html; a.bubbleHtml = html; }
       a.tag.element.classList.toggle('asking', !!b.asking || s.status === 'needs_you');
       a.tag.element.classList.toggle('own', b.own);
       // a new status pops the bubble up wherever you are (it fades again unless pinned); "idle for 2h" ticking doesn't count
-      const statusKey = [s.status, b.mood, b.text, b.asking, s.results?.charts || 0].join('|');
+      const statusKey = [s.status, b.mood, b.text, b.asking, s.results?.charts || 0, news.map((n) => n.id).join(',')].join('|');
       if (a.statusKey !== undefined && a.statusKey !== statusKey) a.showUntil = performance.now() + BUBBLE_MS;
       a.statusKey = statusKey;
       const prev = this.prevStatus.get(id);
@@ -632,7 +643,8 @@ export class World {
         else if (performance.now() > a.hideAt) a.tag.visible = false;
       }
       a.alert.visible = s.status === 'needs_you' && !a.tag.visible;
-      a.chip.visible = !!s.results && !a.tag.visible && !a.alert.visible && Date.now() - s.results.updatedAt < FRESH_RESULTS_MS;
+      a.newsChip.visible = !!a.newsHtml && !a.tag.visible && !a.alert.visible;
+      a.chip.visible = !!s.results && !a.tag.visible && !a.alert.visible && !a.newsChip.visible && Date.now() - s.results.updatedAt < FRESH_RESULTS_MS;
       a.interns.forEach((intern, k) => {
         const ang = t * 0.5 + k * 2.1;
         intern.root.position.set(pose.x + Math.cos(ang) * 0.4 - 0.5 + k * 0.5, 0, pose.z + Math.sign(pose.z) * (0.9 + 0.1 * Math.sin(ang)));

@@ -301,6 +301,14 @@ body.placing canvas { cursor: move !important; }
 .tag.bubble .b-ask { margin-top: 5px; font-size: 12.5px; font-weight: 600; color: #b3261e; }
 .tag.bubble.asking { background: #fff1ef; box-shadow: 0 0 0 2px #e5533d, 0 4px 16px #e5533d40; }
 .tag.bubble.asking::after { border-top-color: #e5533d; }
+/* board news waiting for the session (unblocked, finished elsewhere, claim taken over) */
+.tag.bubble .b-news { margin-top: 5px; font-size: 12px; font-weight: 600; color: #1d5fae; background: #eef4fc; border-radius: 8px; padding: 3px 7px; }
+.tag.bubble .b-news.more { font-weight: 450; color: var(--muted); background: none; padding: 0 7px; }
+.tag.news-chip { pointer-events: auto; cursor: pointer; font-weight: 600; color: #1d5fae; box-shadow: 0 0 0 2px #2a78d633, 0 2px 8px #00000014; }
+.tag.news-chip span { color: var(--muted); font-weight: 450; }
+.tag.news-chip:hover { box-shadow: 0 0 0 2px #2a78d6, 0 2px 8px #00000014; }
+.news-list { display: flex; flex-direction: column; gap: 6px; }
+.news-list .news-item { background: #eef4fc; color: #1d5fae; border-radius: 10px; padding: 7px 11px; font-size: 13.5px; font-weight: 550; }
 
 /* session panel: status */
 .status-now { display: flex; gap: 10px; align-items: flex-start; background: #f7f7f5; border-radius: 12px; padding: 10px 12px; }

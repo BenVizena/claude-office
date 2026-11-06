@@ -10,6 +10,7 @@ import { Catalog, DecorStore } from './decor.js';
 import { Staff } from './staff.js';
 import { addItem, updateItem, removeItem, claimItem, releaseItem, addDetail, readDetails, listBoards, moveItem, addDependency, removeDependency, markSessionClaims } from './todos.js';
 import { boardNews, forgetSession } from './nudges.js';
+import { ack as ackNews, scanAll } from './news.js';
 import { startOnItem } from './launch.js';
 import { computeUsage } from './usage.js';
 import { useNonBlockingLocks, whenUnlocked } from './lock.js';
@@ -36,12 +37,21 @@ async function rebuild() {
   building = true;
   try {
     state = await buildOffice({ scanner, settings, hooks, decor, catalog, staff });
-    state.todoBoards = listBoards().map((bd) => ({ id: bd.id, name: bd.name, items: bd.items }));
+    const boards = listBoards();
+    state.todoBoards = boards.map((bd) => ({ id: bd.id, name: bd.name, items: bd.items }));
+    attachNews(state, boards);
     state.settings = { soundHint: true, showBackgroundSessions: settings.showBackgroundSessions, blender: !!resolveBlender(settings) };
     broadcast({ type: 'state', state });
   } catch (e) {
     console.error('rebuild failed:', e);
   } finally { building = false; }
+}
+
+/** News waiting for each session (unblocked, finished, claim taken over): shown as a badge at its desk. */
+function attachNews(st, boards) {
+  let pending;
+  try { pending = scanAll(boards); } catch (e) { console.error('news scan failed:', e.message); return; }
+  for (const room of st.rooms) for (const pod of room.pods) for (const s of pod.sessions) s.news = pending.get(s.id) || [];
 }
 
 // ---- polling loop ----
@@ -104,22 +114,26 @@ const routes = {
     // Browsers always send Origin on cross-site POSTs, and an application/json body forces a CORS preflight we never approve.
     if (req.headers.origin || !/^application\/json\b/i.test(req.headers['content-type'] || '')) throw Object.assign(new Error('forbidden'), { code: 403 });
     if (!b.session_id) return { ok: false };
+    // the hook printed the news we gave it: it can leave the outbox
+    if (b.ack !== undefined) { await whenUnlocked(() => ackNews(b.session_id, b.ack)); markDirty(); return { ok: true }; }
     hooks.set(b.session_id, { event: b.hook_event_name, at: Date.now(), tool: b.tool_name, message: b.message, cwd: b.cwd });
     if (['SessionStart', 'Stop', 'SessionEnd', 'UserPromptSubmit', 'Notification', 'PreCompact', 'PermissionRequest'].includes(b.hook_event_name)) {
       scanner.scan();
       broadcast({ type: 'event', event: b.hook_event_name, sessionId: b.session_id, message: b.message || null });
     }
-    // claims follow the session's life: ended -> anyone may take them over; back (resume) -> they're its own again
     const ev = b.hook_event_name;
-    if (ev === 'SessionEnd' || ev === 'SessionStart' || ev === 'UserPromptSubmit') {
-      try { if (await whenUnlocked(() => markSessionClaims(b.session_id, ev === 'SessionEnd' ? Date.now() : null))) markDirty(); }
-      catch (e) { console.error('claim update failed:', e.message); }
-    }
+    // board news first: the hook gives up after 800 ms, and the claim update below may wait on a board's lock
+    const news = ev === 'SessionEnd' ? null : await boardNews(b.session_id, ev, b.cwd);
     if (ev === 'SessionEnd') forgetSession(b.session_id);
+    // claims follow the session's life: ended -> anyone may take them over; back (resume) or started (a ▶ launch) ->
+    // they're its own again. Not awaited, so a busy lock never holds up the hook.
+    if (ev === 'SessionEnd' || ev === 'SessionStart' || ev === 'UserPromptSubmit') {
+      whenUnlocked(() => markSessionClaims(b.session_id, ev === 'SessionEnd' ? Date.now() : null))
+        .then((n) => { if (n) markDirty(); })
+        .catch((e) => console.error('claim update failed:', e.message));
+    }
     markDirty();
-    // board news the hook adds to the session's context (SessionStart / UserPromptSubmit only)
-    const context = await boardNews(b.session_id, ev, b.cwd);
-    return context ? { ok: true, context } : { ok: true };
+    return news ? { ok: true, context: news.context, upTo: news.upTo } : { ok: true };
   },
 
   'GET /api/todos/details': async (b, req) => {

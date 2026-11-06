@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { STAFF_DIR, REPO_DIR, claudeCommand, normPath } from './config.js';
 import { claimItem, releaseItem, readBoard, claimIsStale } from './todos.js';
+import { subscribe } from './news.js';
 
 const LAUNCH_DIR = path.join(STAFF_DIR, '..', 'launch');
 const CLI = path.join(REPO_DIR, 'bin', 'office-todo.js').replace(/\\/g, '/');
@@ -17,7 +18,12 @@ function promptFor(board, id) {
     + `It is already claimed for this session. First run: node "${CLI}" show ${id} `
     + '- it has the task, its subtasks and any background other sessions left. Then do the work, following the office-todo skill '
     + `(update your status, add follow-ups you notice). When it is finished and verified, run: node "${CLI}" done ${id}. `
-    + 'If you cannot finish it, leave what you found as background with `context` and release it.';
+    + 'If you cannot finish it, leave what you found as background with `context` and release it. '
+    + `Right away, also start node "${CLI}" wait as a background command (run_in_background): it uses no tokens while it waits and `
+    + 'finishes when an item you follow changes (unblocked, finished by someone else, your claim taken over), printing what happened '
+    + '- start it again whenever it finishes and says you still follow items. If your claim is taken over, stop and check with `show`. '
+    + 'If the item still waits on other items (show marks them "waits on"), do not work around them: set your status to waiting '
+    + 'and end your turn; the watcher wakes you when they are done.';
 }
 
 /** Throws with a readable message when the item can't be started. Returns { session, worktree }. */
@@ -32,7 +38,11 @@ export function startOnItem({ room, id, worktree, claudePath }) {
   if (it.claim && !claimIsStale(it.claim)) throw new Error(`${it.claim.by} is already working on it`);
 
   const session = crypto.randomUUID();
-  claimItem(room.key, id, { by: `claude ${session.slice(0, 8)}`, session, force: false });
+  // pending until the session's SessionStart arrives: a launch that never starts frees the item after a few minutes
+  claimItem(room.key, id, { by: `claude ${session.slice(0, 8)}`, session, force: false, pending: true });
+  // follow the item from now, so news from before the session's first hook isn't missed (best effort: never retried,
+  // since a retry would launch a second session)
+  try { subscribe(session, readBoard(room.key), id, 'claim'); } catch { /* the office subscribes it on its first hook */ }
   try {
     openTerminal({ cwd: pod.path, claudePath, args: ['--session-id', session, promptFor(room.key, id)], title: `Claude: ${room.name} ${id}`, session });
   } catch (e) {

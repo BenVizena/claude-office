@@ -6,6 +6,7 @@ import { overviewHtml } from './overview.js';
 import { bubbleFor } from './now-recent.js';
 import { sessionIndex, openTabHtml, completedTabHtml } from './todos-ui.js';
 import { treeTabHtml, treeDrag } from './todo-tree.js';
+import { newsText } from './news-text.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -177,6 +178,8 @@ export class UI {
         <div>Last tool</div><div>${esc(s.lastTool || '—')}${s.lastToolDetail ? ` <span class="sub mono">${esc(s.lastToolDetail)}</span>` : ''}</div>
         <div>Folder</div><div class="mono">${esc(s.cwd)}</div>
       </div>
+      ${s.news?.length && s.status !== 'gone' ? `<h3>Board news for this session</h3><div class="news-list">${s.news.map((n) => `<div class="news-item">${esc(newsText(n))}</div>`).join('')}</div>
+        <div class="sub">It hears this on your next message to it (or sooner, if it runs <code>office-todo wait</code>).</div>` : ''}
       ${s.claims?.length ? `<h3>Working on (claimed to-dos)</h3><div class="chips">${s.claims.map((c) => `<button class="chip claim working" data-open-todo="${esc(c.board)}">🔒 ${esc(c.text)}</button>`).join('')}</div>` : ''}
       ${s.lastPrompt ? `<h3>Last thing you asked</h3><div class="quote">${esc(s.lastPrompt)}</div>` : ''}
       ${s.lastAssistantText ? `<h3>Last thing Claude said</h3><div class="quote">${esc(s.lastAssistantText)}</div>` : ''}

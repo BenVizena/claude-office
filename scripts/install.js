@@ -95,6 +95,9 @@ ${T} release <id>                  # giving it up unfinished
 ${T} block <id> "why it's blocked"
 ${T} mine                          # what you have claimed
 ${T} completed [--days 7]          # recently finished
+${T} watch <id> | unwatch <id>     # follow an item's news (items you claim or add are followed automatically)
+${T} following                     # what you follow, and news not delivered yet
+${T} wait                          # run in the BACKGROUND: finishes when an item you follow changes
 \`\`\`
 
 Flags: \`--global\` for the office-wide board, \`--project <path>\` for another project, \`--json\` for
@@ -109,7 +112,16 @@ machine-readable output, \`--by "<short label>"\` to describe yourself (e.g. "cl
   session that has closed: you can take it with a plain \`claim\` (read its background first with \`show\`).
 - **Board news arrives on its own.** When a session starts, and when an item you claimed or created changes (it was
   unblocked, done by someone else, taken over) or the user adds an item, a short "[Claude Office to-do board]" note
-  is added to your context. Act on it only when it bears on what the user asked.
+  is added to your context. Act on it only when it bears on what the user asked. You follow items you claim or add;
+  \`watch <id>\` follows another one (say, something your work depends on). Following ends by itself when the item is
+  done, or your claim on it is gone.
+- **Waiting on the board? Use \`wait\` in the background.** When you would otherwise sit idle until another session
+  finishes something — or you were started from the board (▶) to work on an item — start \`${T} wait\` as a
+  background command (run_in_background). It uses no tokens while it waits and finishes when an item you follow is
+  unblocked, finished by someone else, or your claim is taken over, printing what happened; start it again if it
+  says you still follow items. Without it, news reaches you on the user's next message. If an idle session is woken
+  by news, don't start new work on your own: set a status such as "X is unblocked, ready when you are" and wait
+  for the user (unless you were started from the board to do exactly that item).
 - **Break big items down.** Add subtasks with \`--parent <id>\` when an item has several real steps; claim the
   subtask you are doing. When the last subtask is done the CLI will hint that the parent can be closed.
   To restructure existing items use \`move <id> --parent <id>\` — never delete and re-add them (that loses
