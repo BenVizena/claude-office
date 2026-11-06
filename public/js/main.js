@@ -7,6 +7,7 @@ import { Sound } from './audio.js';
 import { connect, api } from './net.js';
 import { NavGrid } from './nav.js';
 import { DecorEditor } from './decor-edit.js';
+import { ResultsWindow } from './results-ui.js';
 
 // ---------------- renderer / scene ----------------
 const app = document.getElementById('app');
@@ -53,7 +54,7 @@ function resize() {
 addEventListener('resize', resize);
 resize();
 addEventListener('wheel', (e) => {
-  if (e.target.closest('#panel, #help')) return;
+  if (e.target.closest('#panel, #help, #results-win')) return;
   zoom = THREE.MathUtils.clamp(zoom * (1 + Math.sign(e.deltaY) * 0.1), 4, 40);
   resize();
 }, { passive: true });
@@ -76,6 +77,7 @@ scene.add(marker);
 const camTarget = new THREE.Vector3(player.x, 0, player.z);
 
 const ui = new UI({ getState: () => state, getUsage: () => usage });
+const resultsWin = new ResultsWindow({ getState: () => state });
 world.nav = nav;
 
 const hud = {
@@ -152,6 +154,7 @@ connect((msg) => {
     }
     updateHud();
     ui.refresh();
+    resultsWin.refresh();
   }
 }, (ok) => hud.conn.classList.toggle('hidden', ok));
 
@@ -183,7 +186,7 @@ addEventListener('keydown', (e) => {
   if (e.target.closest('input, textarea, select')) return;
   const k = e.key.toLowerCase();
   keys.add(k);
-  if (k === 'escape') { if (ui.isOpen) ui.close(); document.getElementById('help').classList.add('hidden'); }
+  if (k === 'escape') { if (resultsWin.isOpen) resultsWin.close(); else if (ui.isOpen) ui.close(); document.getElementById('help').classList.add('hidden'); }
   if (k === 'e' && !e.repeat) interactNearest();
   if (k === 'm') hud.sound.click();
   if (k === '?') document.getElementById('help').classList.toggle('hidden');
@@ -214,6 +217,7 @@ renderer.domElement.addEventListener('pointermove', (ev) => {
   renderer.domElement.style.cursor = hovered ? 'pointer' : 'default';
 });
 addEventListener('office:open-session', (e) => { sound.click(); ui.open({ kind: 'session', session: e.detail }); });
+addEventListener('office:open-results', (e) => { sound.click(); resultsWin.open(e.detail); });
 
 const decorEditor = new DecorEditor({ world, camera, dom: renderer.domElement, ui, sound, pickInteract: pick });
 
@@ -232,6 +236,7 @@ function activate(it) {
   sound.click();
   switch (it.kind) {
     case 'session': ui.open({ kind: 'session', session: it.session }); break;
+    case 'results': resultsWin.open({ board: it.board, session: it.session, run: it.run }); break;
     case 'projectBoard': case 'pod': ui.open({ kind: 'projectBoard', room: it.room || roomOfPod(it.pod) }); break;
     case 'todo': ui.open({ kind: 'todo', board: it.board, room: it.room, tab: it.tab || 'open' }); break;
     case 'designer': ui.open({ kind: 'designer', room: it.room }); break;

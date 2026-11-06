@@ -6,7 +6,7 @@ import { podPosition, WALL_H, BOARD, DOOR_W, ARCH, adminSpot, designerSpot } fro
 import { BUILTIN_CATALOG } from '../shared/catalog.js';
 import {
   roomShell, deskPod, nameplate, doorSign, clutter, paperStacks, dust, roomCobwebs, wallBoard, seatPose, SEATS,
-  receptionDesk, janitorBot, DESK_H,
+  receptionDesk, janitorBot, DESK_H, resultsScreen,
 } from './props.js';
 import { Person, jacket, ROLE_STYLE } from './character.js';
 import { buildItem } from './catalog-builders.js';
@@ -18,6 +18,8 @@ import {
 const STATUS_RANK = { needs_you: 0, working: 1, compacting: 2, idle: 3, away: 4, gone: 5 };
 
 const BUBBLE_MS = 5000; // how long a bubble stays up after you walk up or its status changes
+const FRESH_RESULTS_MS = 5 * 60000; // results this new get a "📊 New results" tag even while the bubble is down
+const openResults = (s) => dispatchEvent(new CustomEvent('office:open-results', { detail: { board: s.results.board, session: s.id, run: s.results.latest } }));
 
 function label(className, html) {
   const el = document.createElement('div');
@@ -330,6 +332,7 @@ export class World {
       // monitor
       const scr = pv.desk.monitors[i].userData.screen.material;
       scr.userData.status = s?.status || 'off';
+      this.syncResultsScreen(pv, i, s, room);
     }
     // agents
     const want = new Map();
@@ -348,7 +351,10 @@ export class World {
         tag.position.set(0, 1.85, 0); tag.visible = false;
         tag.element.addEventListener('mouseenter', () => { tag.userData.hover = true; });
         tag.element.addEventListener('mouseleave', () => { tag.userData.hover = false; });
-        tag.element.addEventListener('click', () => dispatchEvent(new CustomEvent('office:open-session', { detail: id })));
+        tag.element.addEventListener('click', (e) => {
+          if (e.target.closest('.b-results') && a?.session?.results) { e.stopPropagation(); openResults(a.session); return; }
+          dispatchEvent(new CustomEvent('office:open-session', { detail: id }));
+        });
         tag.element.addEventListener('contextmenu', (e) => {
           e.preventDefault(); e.stopPropagation();
           dispatchEvent(new CustomEvent('office:agent-menu', { detail: { id, x: e.clientX, y: e.clientY } }));
@@ -357,7 +363,12 @@ export class World {
         const alert = label('alert', '✋ needs you');
         alert.position.set(0, 2.0, 0); alert.visible = false;
         person.root.add(alert);
-        a = { person, role: s.role, tag, alert, interns: [], bot: null };
+        // while the bubble is down, fresh results still get a small tag of their own
+        const chip = label('results-chip', '📊 New results');
+        chip.position.set(0, 2.0, 0); chip.visible = false;
+        chip.element.addEventListener('click', (e) => { e.stopPropagation(); if (a.session?.results) openResults(a.session); });
+        person.root.add(chip);
+        a = { person, role: s.role, tag, alert, chip, interns: [], bot: null };
         pv.group.add(person.root);
         pv.agents.set(id, a);
         if (this.prevStatus.size) events.push({ type: 'arrive', session: s });
@@ -367,12 +378,13 @@ export class World {
       const b = bubbleFor(s);
       const html = `<div class="b-who">${esc(s.title)} <span class="role">· ${esc(s.role)}</span></div>
         <div class="b-say">${b.mood ? `<span class="b-mood">${esc(b.mood)}</span> ` : ''}${esc(b.text)}${b.idle ? ` <span class="b-idle">(${b.idle})</span>` : ''}</div>
-        ${b.asking ? `<div class="b-ask">❓ ${esc(b.asking)}</div>` : ''}`;
+        ${b.asking ? `<div class="b-ask">❓ ${esc(b.asking)}</div>` : ''}
+        ${s.results ? `<div class="b-results" title="Open the charts and results this session posted">📊 View results <span>· ${s.results.charts}</span></div>` : ''}`;
       if (a.bubbleHtml !== html) { a.tag.element.innerHTML = html; a.bubbleHtml = html; }
       a.tag.element.classList.toggle('asking', !!b.asking || s.status === 'needs_you');
       a.tag.element.classList.toggle('own', b.own);
       // a new status pops the bubble up wherever you are (it fades again unless pinned); "idle for 2h" ticking doesn't count
-      const statusKey = [s.status, b.mood, b.text, b.asking].join('|');
+      const statusKey = [s.status, b.mood, b.text, b.asking, s.results?.charts || 0].join('|');
       if (a.statusKey !== undefined && a.statusKey !== statusKey) a.showUntil = performance.now() + BUBBLE_MS;
       a.statusKey = statusKey;
       const prev = this.prevStatus.get(id);
@@ -410,6 +422,31 @@ export class World {
       pv.dustSig = dustSig;
     }
     pv.sign.userData.interact.label = `${pod.branch || 'workspace'} · ${pod.sessions.length} session${pod.sessions.length === 1 ? '' : 's'}`;
+  }
+
+  /** The little results screen on seat i's desk: there while the session has results, showing its latest line. */
+  syncResultsScreen(pv, i, s, room) {
+    pv.resultScreens ||= [];
+    const cur = pv.resultScreens[i];
+    const res = s?.status !== 'gone' ? s?.results : null;
+    if (!res) {
+      if (cur) { pv.dyn.remove(cur.obj); disposeTree(cur.obj); pv.resultScreens[i] = null; }
+      return;
+    }
+    let r = cur;
+    if (!r || r.session !== s.id) {
+      if (r) { pv.dyn.remove(r.obj); disposeTree(r.obj); }
+      const obj = resultsScreen();
+      const seat = SEATS[i];
+      // by the divider, between this seat's monitor and the next (always the same side, so neighbours never meet)
+      obj.position.set(seat.x + 0.62, DESK_H, seat.side * 0.16);
+      pv.dyn.add(obj);
+      r = pv.resultScreens[i] = { obj, session: s.id, sig: null, updatedAt: 0 };
+    }
+    r.obj.userData.interact = { kind: 'results', board: res.board, session: s.id, run: res.latest, label: `Results · ${s.title}` };
+    r.updatedAt = res.updatedAt;
+    const sig = JSON.stringify([res.charts, res.spark]);
+    if (r.sig !== sig) { r.sig = sig; r.obj.userData.redraw((ctx, w, h) => drawResultsScreen(ctx, w, h, res)); }
   }
 
   syncRoom(view, room, events) {
@@ -469,6 +506,7 @@ export class World {
       for (const pv of v.pods.values()) {
         this.interactables.push(pv.sign);
         for (const a of pv.agents.values()) this.interactables.push(a.person.root);
+        for (const r of pv.resultScreens || []) if (r) this.interactables.push(r.obj);
       }
     }
   }
@@ -561,6 +599,12 @@ export class World {
       else if (st === 'idle' || st === 'compacting') { scr.emissive.set('#9bb7d9'); scr.emissiveIntensity = 0.35; }
       else { scr.emissive.set('#000000'); scr.emissiveIntensity = 0; }
     });
+    // results screens glow brighter for a while after new results come in
+    for (const r of pv.resultScreens || []) {
+      if (!r) continue;
+      const fresh = Date.now() - r.updatedAt < 90000;
+      r.obj.userData.face.material.emissiveIntensity = fresh ? 0.55 + 0.25 * Math.sin(t * 4) : 0.45;
+    }
     for (const a of pv.agents.values()) {
       const s = a.session;
       const pose = seatPose(a.seat);
@@ -588,6 +632,7 @@ export class World {
         else if (performance.now() > a.hideAt) a.tag.visible = false;
       }
       a.alert.visible = s.status === 'needs_you' && !a.tag.visible;
+      a.chip.visible = !!s.results && !a.tag.visible && !a.alert.visible && Date.now() - s.results.updatedAt < FRESH_RESULTS_MS;
       a.interns.forEach((intern, k) => {
         const ang = t * 0.5 + k * 2.1;
         intern.root.position.set(pose.x + Math.cos(ang) * 0.4 - 0.5 + k * 0.5, 0, pose.z + Math.sign(pose.z) * (0.9 + 0.1 * Math.sin(ang)));
@@ -601,6 +646,28 @@ export class World {
         a.bot.rotation.y = -ang;
       }
     }
+  }
+}
+
+/** The desk screen: a dark display with the latest line chart's last values as a sparkline. */
+function drawResultsScreen(ctx, w, h, res) {
+  ctx.fillStyle = '#1f2328'; ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#c3c2b7'; ctx.font = '600 22px Inter, "Segoe UI", system-ui, sans-serif';
+  ctx.fillText(`📊 ${res.charts} result${res.charts === 1 ? '' : 's'}`, 16, 34);
+  const v = res.spark?.values || [];
+  const x0 = 18, x1 = w - 22, y0 = 58, y1 = h - 22;
+  ctx.strokeStyle = '#34383f'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x0, y1); ctx.lineTo(x1, y1); ctx.stroke();
+  if (v.length >= 2) {
+    const lo = Math.min(...v), hi = Math.max(...v), span = hi - lo || 1;
+    const px = (i) => x0 + (i / (v.length - 1)) * (x1 - x0), py = (x) => y1 - ((x - lo) / span) * (y1 - y0);
+    ctx.strokeStyle = '#3987e5'; ctx.lineWidth = 5; ctx.lineJoin = ctx.lineCap = 'round';
+    ctx.beginPath(); v.forEach((x, i) => (i ? ctx.lineTo(px(i), py(x)) : ctx.moveTo(px(i), py(x)))); ctx.stroke();
+    ctx.fillStyle = '#3987e5'; ctx.beginPath(); ctx.arc(px(v.length - 1), py(v[v.length - 1]), 9, 0, Math.PI * 2); ctx.fill();
+  } else {
+    // no line to show: a few bars as an icon
+    ctx.fillStyle = '#3987e5';
+    [0.45, 0.75, 0.6, 0.9].forEach((f, i) => ctx.fillRect(x0 + 20 + i * 62, y1 - f * (y1 - y0), 40, f * (y1 - y0)));
   }
 }
 

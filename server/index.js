@@ -10,6 +10,7 @@ import { Catalog, DecorStore } from './decor.js';
 import { Staff } from './staff.js';
 import { addItem, updateItem, removeItem, claimItem, releaseItem, addDetail, readDetails, listBoards, moveItem, addDependency, removeDependency } from './todos.js';
 import { computeUsage } from './usage.js';
+import { listRuns, runSummary, loadRun, imagePath, removeRun, IMAGE_TYPES } from './results.js';
 
 let settings = loadSettings();
 if (syncHookCopy()) console.log('Updated the installed Claude Code hook to this version.');
@@ -112,6 +113,16 @@ const routes = {
     const u = new URL(req.url, 'http://x');
     return readDetails(u.searchParams.get('board'), u.searchParams.get('id'));
   },
+
+  // results posted by sessions (office-todo results ...): a project's runs, or one run with its data
+  'GET /api/results': async (b, req) => {
+    const u = new URL(req.url, 'http://x');
+    const board = u.searchParams.get('board'), run = u.searchParams.get('run');
+    if (run) return loadRun(board, run) || { missing: true };
+    return listRuns(board).map(runSummary).sort((x, y) => y.updatedAt - x.updatedAt);
+  },
+
+  'POST /api/results/remove': async (b) => { const r = removeRun(String(b.board), String(b.run)); markDirty(); return { ok: true, id: r.id }; },
 
   'POST /api/todos': async (b) => {
     const room = findRoom(b.board === 'office' ? 'lobby' : b.board);
@@ -224,6 +235,17 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       json(res, e.code === 403 ? 403 : 400, { error: e.message });
     }
+    return;
+  }
+  if (req.method === 'GET' && url.pathname === '/api/results/image') {
+    // only images that a results chart points at (a stored copy, or a plot file a session asked us to watch)
+    let file = null;
+    try { file = imagePath(url.searchParams.get('board'), url.searchParams.get('run'), url.searchParams.get('chart')); } catch { /* bad ids */ }
+    if (!file || !fs.existsSync(file)) { res.writeHead(404); res.end('not found'); return; }
+    const type = IMAGE_TYPES[path.extname(file).toLowerCase()];
+    // an SVG could carry script: it is only ever shown through <img>, and the CSP stops it if opened directly
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'", 'X-Content-Type-Options': 'nosniff' });
+    fs.createReadStream(file).pipe(res);
     return;
   }
   if (req.method === 'GET' && serveStatic(req, res, url.pathname)) return;

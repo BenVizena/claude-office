@@ -21,6 +21,11 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
 - **Agents keep the boards up to date themselves.** With the `office-todo` skill installed, your sessions claim the
   to-dos they're working on, split big ones into subtasks, attach notes on what they found, mark items done or
   blocked, and set their own speech bubble. They raise a ✋ only when they need a decision from you.
+- **Results.** Sessions can post charts, tables, images and short notes (test runs, benchmarks, training metrics)
+  with `office-todo results …`, partial results included. A small screen with a live sparkline goes up on the
+  agent's desk and a "📊 View results" tab sits above its speech bubble; click either to open the results window.
+  A session can point the office at a metrics file its script keeps appending to, and the chart redraws as the
+  file grows. Results stay listed in the project's panel after the session ends.
 - **The designer** by each door redecorates the room on request (background `claude -p` on your subscription). It
   picks from a catalog and can model missing pieces in Blender; new pieces wait for your approval in the lobby.
   It can read the room's project folder and reuse its art: game sprites become chunky voxel 3D models

@@ -69,7 +69,7 @@ function installSkill() {
   const T = `node "${TODO_CLI}"`;
   fs.writeFileSync(path.join(SKILL_DIR, 'SKILL.md'), `---
 name: office-todo
-description: Read and update the shared Claude Office to-do boards (one per project plus an office-wide board) — claim items you work on, break them into subtasks, attach background, mark them done — and set your status speech bubble in the office (update it when your phase of work changes; ask the user a question with --needs-you). Use when the user mentions the todo board / office todos, when you start or finish a task that is on the board, when you discover follow-up work worth tracking, or when asked what's left to do.
+description: Read and update the shared Claude Office to-do boards (one per project plus an office-wide board) — claim items you work on, break them into subtasks, attach background, mark them done — set your status speech bubble in the office (update it when your phase of work changes; ask the user a question with --needs-you), and post results for the user to view (charts of test, benchmark, training or eval metrics — partial results too — tables, images, notes). Use when the user mentions the todo board / office todos, when you start or finish a task that is on the board, when you discover follow-up work worth tracking, when you run tests, benchmarks, training or experiments whose results the user will want to see, or when asked what's left to do.
 ---
 
 # Office to-do boards
@@ -136,6 +136,43 @@ ${T} status --clear
   question in your reply as well.
 - It stays up until you change it (the office adds "idle for 2h" if you go quiet), so set a final one when you
   finish, e.g. \`status "Done: … (waiting for review)" --mood 🎉\`.
+
+## Showing results (charts, tables, images, notes)
+When you produce results the user will want to look at — test runs, benchmarks, training or eval metrics,
+experiment comparisons — post them to the office. A screen appears on your desk and a "📊 View results" tab sits
+above your speech bubble; the user clicks it to see your charts. **Post partial results as they come in** (epoch 1-5
+while more epochs are still running), not only at the end.
+
+\`\`\`bash
+${T} results log "Loss" --x 3 train=0.42 val=0.51 [--x-label epoch] [--y-label loss]   # one point per call
+${T} results log "Accuracy by model" --type bar --x resnet50 acc=0.91                 # bars: x is the category
+${T} results watch "Training" --file runs/exp3/metrics.jsonl --x epoch --y loss,val_loss  # live: re-read on change
+${T} results watch "Confusion matrix" --file out/cm.png                               # a plot your script rewrites
+${T} results add "Benchmarks" --type table --file bench.csv                           # copy a table in once
+${T} results image "Attention map" --file attn.png                                    # copy an image in
+${T} results note "Takeaways" "Val loss plateaus after epoch 8; lr 3e-4 is best."
+${T} results list | rm "<chart>" | clear | help
+\`\`\`
+
+- **Long-running jobs: use \`watch\`, not \`log\`.** While a training run or test suite is going you are usually
+  waiting, not awake at every epoch. Have the script append one JSON object (or CSV row) per epoch/step to a file
+  and \`watch\` it once — the office redraws as the file grows. Use \`log\` for points you compute yourself.
+- Files can be CSV/TSV with a header row, JSON lines, a JSON array, or a markdown table. \`--x\` names the x column
+  (default: epoch/step if present); \`--y\` picks columns (default: every numeric one).
+- Chart titles are the identity: logging to the same title adds to that chart, and the same \`--x\` again replaces
+  that point. Keep one measure per chart (don't mix loss and accuracy on one axis — make two charts).
+- Results are grouped per session by default. For separate experiments use \`--run "exp3 lr=3e-4"\` on every
+  command for that experiment so the user can switch between them. They stay in the project after you finish.
+- **Explain the results clearly — the user can't ask you about them in the office.** The results window has no chat,
+  so every chart has to make sense on its own to someone who hasn't read your session:
+  - Titles say what is measured (\`"Validation loss (ResNet-50, CIFAR-10)"\`, not \`"loss2"\`); axis labels name the
+    quantity and its unit (\`--y-label "latency (ms)"\`); series names are readable words, not variable names.
+  - Use \`--caption\` for the setup and how to read it: what was run, what's being compared, whether lower or
+    higher is better, and how complete it is ("epochs 1-5 of 20 so far", "3 of 5 seeds").
+  - Add a \`note\` with the takeaway: what the results show, how confident you are, caveats (noise, small samples,
+    flaky tests, anything unusual about the run) and what you'll do next. The charts show what happened; the note says
+    what it means. Update it as partial results change the picture.
+- Keep routine output (full logs, every test name) out; this is for results worth looking at.
 `);
   console.log(`Skill installed at ${SKILL_DIR}`);
 }

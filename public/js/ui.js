@@ -163,6 +163,8 @@ export class UI {
         ${s.background ? '<span class="chip">background (-p)</span>' : ''}
       </div>
       ${this.statusHtml(s)}
+      ${s.results ? `<div><button class="primary" data-open-results="${esc(s.results.board)}" data-session="${esc(s.id)}" data-run="${esc(s.results.latest || '')}">📊 View results</button>
+        <span class="sub">${s.results.charts} item${s.results.charts === 1 ? '' : 's'} · updated ${ago(s.results.updatedAt)}</span></div>` : ''}
       <div>
         <div class="sub" style="display:flex;justify-content:space-between"><span>Context</span><span>${fmtTok(s.contextTokens)} / ${fmtTok(s.contextWindow)} (${pct}%)</span></div>
         <div class="bar"><div style="width:${pct}%"></div></div>
@@ -227,6 +229,10 @@ export class UI {
       <div class="chips"><span class="chip">${room.pods.length} worktree${room.pods.length > 1 ? 's' : ''}</span><span class="chip">last activity ${ago(room.lastActivity)}</span>
         <span class="chip">${room.todos.filter((t) => t.status !== 'done').length} open to-dos</span></div>
       ${rows}
+      ${room.results?.length ? `<h3>Results</h3><table>${room.results.map((r) => `
+        <tr class="clickable" data-open-results="${esc(room.key)}" data-session="${esc(r.session || '')}" data-run="${esc(r.id)}">
+          <td>📊 ${esc(r.title || this.findSession(state, r.session)?.s.title || r.id)}<div class="sub">${r.charts.map((c) => esc(c.title)).slice(0, 4).join(' · ')}${r.charts.length > 4 ? ' …' : ''}</div></td>
+          <td class="sub">${r.charts.length}</td><td class="sub">${ago(r.updatedAt)}</td></tr>`).join('')}</table>` : ''}
       ${branches ? `<h3>All branches</h3><table>${branches}</table>` : ''}
       <button class="ghost" data-hide-room="${esc(room.key)}">Hide this project from the office</button>`;
   }
@@ -432,6 +438,11 @@ export class UI {
   }
 
   async onClick(e) {
+    const res = e.target.closest('[data-open-results]');
+    if (res) {
+      dispatchEvent(new CustomEvent('office:open-results', { detail: { board: res.dataset.openResults, session: res.dataset.session || null, run: res.dataset.run || null } }));
+      return;
+    }
     const un = e.target.closest('[data-tt-undepend]');
     if (un) {
       const v = this.current;

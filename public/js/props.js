@@ -464,6 +464,30 @@ export function wallBoard(width, height, draw, frameColor = '#2b2d31') {
   return g;
 }
 
+/**
+ * A small screen on a stand that sits on an agent's desk while the session has results to show. It leans back and
+ * turns towards the camera so it reads from the usual view; draw on it with userData.redraw(fn).
+ */
+export function resultsScreen() {
+  const w = 0.5, h = 0.32, pole = 0.62; // up on a pole, so it clears the monitors and the agents' heads
+  const tex = canvasTexture(336, 216, () => {});
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.5, emissive: '#ffffff', emissiveMap: tex, emissiveIntensity: 0.45 }));
+  face.position.set(0, 0, 0.012);
+  face.userData.ownMaterial = face.userData.ownGeometry = true;
+  const panel = group(box(w + 0.04, h + 0.04, 0.02, '#3a3d42', 0, -(h + 0.04) / 2, 0), face);
+  panel.rotation.order = 'YXZ';
+  panel.rotation.set(-0.62, Math.PI / 4, 0);
+  panel.position.y = pole;
+  const g = group(box(0.16, 0.014, 0.12, '#9aa0a6', 0, 0, 0), cyl(0.014, pole, '#9aa0a6', 0, 0, 0, 6), panel);
+  g.userData.face = face;
+  g.userData.redraw = (fn) => {
+    const c = tex.image, ctx = c.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height);
+    fn(ctx, c.width, c.height); tex.needsUpdate = true;
+  };
+  return g;
+}
+
 export function receptionDesk(accent) {
   return group(rbox(3.2, 1.05, 0.8, 0.1, '#ffffff', 0, 0, 0), box(3.25, 0.05, 0.9, '#c8a27a', 0, 1.05, 0.03),
     box(3.0, 0.12, 0.02, mat(accent), 0, 0.5, 0.41), box(0.5, 0.32, 0.03, '#2b2d31', 0.8, 1.1, -0.15),

@@ -9,6 +9,7 @@ const ROOM_SIZES_FILE = path.join(OFFICE_DIR, 'room-sizes.json');
 import { roomSize, placeRooms, dustLevel, LOBBY } from '../public/shared/layout.js';
 import { readBoard, listBoards, GLOBAL_BOARD } from './todos.js';
 import { allStatuses } from './status.js';
+import { listRuns, runSummary, sparkline, projectsWithResults } from './results.js';
 
 const DAY = 86400000;
 
@@ -48,6 +49,25 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
 
   const statuses = allStatuses();
 
+  // results sessions have posted: listed per project, and a summary per session for its desk
+  const runsByProject = new Map();
+  const sessionResults = new Map();
+  for (const slug of projectsWithResults()) {
+    const runs = listRuns(slug);
+    runsByProject.set(slug, runs.map(runSummary).sort((a, b) => b.updatedAt - a.updatedAt));
+    for (const run of runs) {
+      if (!run.session) continue;
+      const sum = runSummary(run);
+      const cur = sessionResults.get(run.session);
+      const entry = cur || { board: slug, runs: [], charts: 0, updatedAt: 0, latest: null };
+      entry.runs.push(run.id);
+      entry.charts += sum.charts.length;
+      if (sum.updatedAt >= entry.updatedAt) { entry.updatedAt = sum.updatedAt; entry.latest = run; entry.board = slug; }
+      sessionResults.set(run.session, entry);
+    }
+  }
+  for (const e of sessionResults.values()) { e.spark = e.latest ? sparkline(e.latest) : null; e.latest = e.latest?.id || null; }
+
   const rooms = [];
   for (const [key, p] of projects) {
     const info = p.isGit ? await repoInfo(p.root) : { worktrees: [], branches: [] };
@@ -70,7 +90,7 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
           pods.push(best);
         }
       }
-      best.sessions.push(withStatus({ ...summarize(s, hooks.get(s.id), now, background), claims: claims.get(s.id) || [] }, statuses.get(s.id), s));
+      best.sessions.push(withStatus({ ...summarize(s, hooks.get(s.id), now, background), claims: claims.get(s.id) || [], results: sessionResults.get(s.id) || null }, statuses.get(s.id), s));
     }
 
     let lastActivity = 0;
@@ -109,6 +129,7 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
       pods,
       branches: info.branches.slice(0, 30).map((b) => ({ ...b, checkedOut: usedBranches.has(b.name) })),
       todos: board.items,
+      results: runsByProject.get(slug) || [],
       recentCommits: recentCommits.slice(0, 20),
       decor: decor.get(slug, size),
     });

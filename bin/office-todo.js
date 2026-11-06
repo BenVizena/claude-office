@@ -19,6 +19,8 @@
 //   mine                              items claimed by this session
 //   completed [--days N]              recently completed items, newest first
 //   boards                            every board with open counts
+//   results ...                       charts/tables/images/notes the user can view in the office
+//                                     (`office-todo results help` for the subcommands)
 // Flags: --project <path|board-id>  --global (office-wide board)  --json  --by "<who>"
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -28,6 +30,32 @@ import { setStatus, clearStatus, readStatus } from '../server/status.js';
 import {
   readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, moveItem, addDependency, removeDependency, openBlockers,
 } from '../server/todos.js';
+import {
+  logPoint, addData, watchFile, addImage, addNote, removeChart, removeRun, listRuns, runSummary, readRun, defaultRunId, slugify,
+} from '../server/results.js';
+
+const RESULTS_HELP = `office-todo results — show the user charts, tables, images and notes in the office
+
+  log "<chart>" [--x <x>] name=value [name=value ...]   add one point (e.g. one epoch) to a chart
+        [--type line|bar|scatter] [--x-label epoch] [--y-label loss]
+  add "<chart>" --file data.csv|- [--type line|bar|scatter|table] [--x col] [--y col1,col2]
+                                                        copy a CSV/TSV/JSON-lines/markdown table in once
+  watch "<chart>" --file path [--type line|bar|scatter|table] [--x col] [--y col1,col2]
+                                                        the office re-reads the file whenever it changes —
+                                                        point it at the metrics file your script appends to,
+                                                        or at a plot image your script rewrites
+  image "<chart>" --file plot.png                       copy an image in (png, jpg, gif, webp, svg)
+  note "<title>" "text" | --file notes.md|-             a short written finding
+  list                                                  results for this project (yours marked)
+  rm "<chart>"                                          remove one chart from your run
+  clear                                                 remove your whole run
+
+  --run "<name>"     group results under a name (default: one group per session) — reuse it to add to it later
+  --run-title "..."  rename the group
+  --caption "..."    one line shown under a chart
+
+The user can't ask you about results in the office, so make each one self-explanatory: a title that says what is
+measured, axis labels with units, a --caption with the setup and how complete it is, and a note with the takeaway.`;
 
 const argv = process.argv.slice(2);
 const flags = {};
@@ -92,6 +120,92 @@ function print(x, board) {
     return;
   }
   console.log(x);
+}
+
+function readInput(file) {
+  if (file === '-') return fs.readFileSync(0, 'utf8');
+  return fs.readFileSync(file, 'utf8');
+}
+
+function results(slug, args) {
+  const [sub = 'help', title, ...more] = args;
+  const ctx = { run: flags.run, runTitle: flags['run-title'], session, by };
+  const opts = { type: flags.type, caption: flags.caption, xLabel: flags['x-label'], yLabel: flags['y-label'] };
+  const ys = flags.y ? String(flags.y).split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+  const needTitle = () => { if (!title) throw new Error(`usage: office-todo results ${sub} "<chart title>" ... (see office-todo results help)`); };
+  const where = (r) => `in ${r.run.title ? `"${r.run.title}"` : "your session's results"} — the user opens them from your desk in the office`;
+  switch (sub) {
+    case 'log': {
+      needTitle();
+      const values = {};
+      for (const a of more) {
+        const m = /^([^=]+)=(.*)$/.exec(a);
+        if (!m) throw new Error(`"${a}" is not name=value`);
+        const v = m[2].trim() === '' ? NaN : Number(m[2].trim().replace(/%$/, ''));
+        if (!Number.isFinite(v)) throw new Error(`${m[1].trim()}=${m[2]} is not a number`);
+        values[m[1].trim()] = v;
+      }
+      const x = flags.x === undefined ? undefined : Number.isFinite(Number(flags.x)) && String(flags.x).trim() !== '' ? Number(flags.x) : String(flags.x);
+      const r = logPoint(slug, ctx, title, { x, values, ...opts });
+      if (flags.json) return print(r.chart);
+      console.log(`logged to "${r.chart.title}" (${r.points} point${r.points === 1 ? '' : 's'}) ${where(r)}`);
+      break;
+    }
+    case 'add': {
+      needTitle();
+      if (!flags.file) throw new Error('usage: office-todo results add "<chart>" --file data.csv|- [--type line|bar|scatter|table]');
+      const r = addData(slug, ctx, title, { text: readInput(flags.file), ext: flags.file === '-' ? '' : path.extname(flags.file).toLowerCase(), x: flags.x, y: ys, ...opts });
+      console.log(`added "${r.chart.title}" (${r.chart.type}, ${r.points} row${r.points === 1 ? '' : 's'}) ${where(r)}`);
+      break;
+    }
+    case 'watch': {
+      needTitle();
+      if (!flags.file || flags.file === '-') throw new Error('usage: office-todo results watch "<chart>" --file <path>');
+      const r = watchFile(slug, ctx, title, { file: flags.file, x: flags.x, y: ys, ...opts });
+      console.log(`watching ${r.chart.source.file} as "${r.chart.title}" (${r.chart.type}) ${where(r)}\nThe office re-reads it whenever it changes — just keep appending to it.`);
+      break;
+    }
+    case 'image': {
+      needTitle();
+      if (!flags.file) throw new Error('usage: office-todo results image "<chart>" --file plot.png');
+      const r = addImage(slug, ctx, title, { file: flags.file, ...opts });
+      console.log(`added image "${r.chart.title}" ${where(r)}`);
+      break;
+    }
+    case 'note': {
+      needTitle();
+      const text = flags.file ? readInput(flags.file) : more.join(' ');
+      const r = addNote(slug, ctx, title, { text, ...opts });
+      console.log(`added note "${r.chart.title}" ${where(r)}`);
+      break;
+    }
+    case 'rm': {
+      needTitle();
+      const r = removeChart(slug, ctx, title);
+      console.log(`removed "${r.chart.title}" from "${r.run.title || r.run.id}"`);
+      break;
+    }
+    case 'clear': {
+      const id = flags.run ? slugify(flags.run) : defaultRunId(session);
+      const run = removeRun(slug, id);
+      console.log(`removed "${run.title || run.id}" and its ${run.charts.length} chart${run.charts.length === 1 ? '' : 's'}`);
+      break;
+    }
+    case 'list': case 'show': {
+      const runs = listRuns(slug).map(runSummary).sort((a, b) => b.updatedAt - a.updatedAt);
+      if (flags.json) return print(runs);
+      if (!runs.length) { console.log('No results for this project yet.'); break; }
+      const mine = flags.run ? slugify(flags.run) : defaultRunId(session);
+      for (const r of runs) {
+        console.log(`${r.id === mine ? '* ' : '  '}${r.title || r.id} (${r.id}${r.session && r.session === session ? ', yours' : ''}) — updated ${new Date(r.updatedAt).toLocaleString()}`);
+        for (const c of r.charts) console.log(`      ${c.type.padEnd(7)} ${c.title}${c.live ? '  (watching a file)' : ''}`);
+      }
+      if (readRun(slug, mine)) console.log('\n* = the run your commands write to');
+      break;
+    }
+    case 'help': console.log(RESULTS_HELP); break;
+    default: throw new Error(`unknown results command "${sub}"\n\n${RESULTS_HELP}`);
+  }
 }
 
 const [cmd = 'list', ...rest] = pos;
@@ -197,6 +311,7 @@ ${d.text}`);
       console.log(`status: ${r.mood ? `${r.mood} ` : ''}${r.text}${r.needsYou ? `\nasking the user: ${r.needsYou} — their next message to you clears it` : ''}`);
       break;
     }
+    case 'results': case 'result': results(slug, rest); break;
     case 'release': need(); print(releaseItem(slug, id, { by })); break;
     case 'done': need(); print(updateItem(slug, id, { status: 'done', by, session }), readBoard(slug)); break;
     case 'block': need(); print(updateItem(slug, id, { status: 'blocked', by, note: rest.slice(1).join(' ') || undefined })); break;
