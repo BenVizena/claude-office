@@ -4,10 +4,14 @@
 //   node scripts/install.js uninstall  # remove both
 import fs from 'node:fs';
 import path from 'node:path';
-import { CLAUDE_DIR, REPO_DIR } from '../server/config.js';
+import { CLAUDE_DIR, HOME, REPO_DIR } from '../server/config.js';
 
 const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
-const HOOK = path.join(REPO_DIR, 'hooks', 'office-hook.mjs').replace(/\\/g, '/');
+// The hook has no imports, so it's copied out of the repo: moving or deleting the clone can't break Claude Code.
+const HOOK_SRC = path.join(REPO_DIR, 'hooks', 'office-hook.mjs');
+const HOOK_DIR = path.join(HOME, '.claude-office');
+const HOOK_FILE = path.join(HOOK_DIR, 'office-hook.mjs');
+const HOOK = HOOK_FILE.replace(/\\/g, '/');
 const MARK = 'office-hook.mjs';
 const EVENTS = {
   SessionStart: null, SessionEnd: null, UserPromptSubmit: null, Stop: null,
@@ -40,6 +44,8 @@ function stripOurs(s) {
 }
 
 function installHooks() {
+  fs.mkdirSync(HOOK_DIR, { recursive: true });
+  fs.copyFileSync(HOOK_SRC, HOOK_FILE);
   const s = stripOurs(readSettings());
   s.hooks ||= {};
   for (const [ev, matcher] of Object.entries(EVENTS)) {
@@ -134,6 +140,7 @@ else if (cmd === 'skill') installSkill();
 else if (cmd === 'uninstall') {
   writeSettings(stripOurs(readSettings()));
   fs.rmSync(SKILL_DIR, { recursive: true, force: true });
+  fs.rmSync(HOOK_FILE, { force: true });
   console.log('Removed Claude Office hooks and the office-todo skill.');
 } else {
   console.log('usage: node scripts/install.js hooks|skill|uninstall');

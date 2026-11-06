@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { STAFF_DIR, REPO_DIR, writeJsonAtomic, readJson, claudeCommand } from './config.js';
+import { STAFF_DIR, REPO_DIR, writeJsonAtomic, readJson, claudeCommand, resolveBlender } from './config.js';
 import { FLOOR_STYLES, VIEWS, SIGN_STYLES, SIGN_FONTS } from '../public/shared/catalog.js';
 import { blockedRects, wallKeepouts, roomOpenings, WALL_H, WINDOW } from '../public/shared/layout.js';
 
@@ -57,17 +57,19 @@ export class Staff {
     const projectDir = room.kind === 'project' && room.root && fs.existsSync(room.root) ? room.root : null;
 
     const settings = this.getSettings();
+    const blender = resolveBlender(settings);
     const conv = this.conv(key);
     conv.messages.push({ from: 'you', text, at: Date.now() });
     const before = JSON.stringify(current);
     const result = await this.run(key, {
       cwd: ws, text, model: settings.decorModel,
       addDirs: projectDir ? [projectDir] : [],
-      system: DECORATOR_PROMPT + (projectDir ? `
+      system: DECORATOR_PROMPT + (blender ? '' : NO_BLENDER) + (projectDir ? `
 
 This room's project lives at ${projectDir} (read-only for you). When the user mentions "the game's", "the project's" or "our" assets, art, characters or screenshots, look there: Glob for images (e.g. **/*.png, skipping .godot/, .import and build folders), Read a few promising ones to see them, then turn the good ones into decor with make-image-item.mjs.` : ''),
-      tools: ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash(node make-item.mjs *)', 'Bash(node make-item.mjs:*)', 'Bash(node make-image-item.mjs *)', 'Bash(node make-image-item.mjs:*)'],
-      env: { OFFICE_BLENDER: settings.blenderPath },
+      tools: ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash(node make-image-item.mjs *)', 'Bash(node make-image-item.mjs:*)',
+        ...(blender ? ['Bash(node make-item.mjs *)', 'Bash(node make-item.mjs:*)'] : [])],
+      env: blender ? { OFFICE_BLENDER: blender } : {},
       timeoutMs: 15 * 60000,
     });
 
@@ -341,6 +343,18 @@ In your current directory:
 You may also read the project files and git history (read-only) to check what actually changed.
 
 You can't talk to the agents or change anything; you report. Answer like a sharp, friendly office manager giving a briefing: lead with the answer, group by agent or worktree, be concrete (what file/feature, what's left), flag risks (two agents touching the same area, an agent waiting on the user, sessions with nearly full context), and keep it short unless asked for detail. Refer to agents by their session title. Don't invent anything that isn't in the roster, transcripts or repo.`;
+
+const BLENDER_INSTALL = process.platform === 'win32' ? 'or run `winget install BlenderFoundation.Blender`'
+  : process.platform === 'darwin' ? 'or run `brew install --cask blender`' : 'or install it from their package manager, snap or flatpak';
+
+const NO_BLENDER = `
+
+IMPORTANT: Blender is NOT installed on this computer, so you can't make Blender items right now: no make-item.mjs, no
+make.py, no sprite_voxels and no import_model. Use the catalog and flat image items (make-image-item.mjs) instead,
+and ignore the Blender instructions above. Only if the user asked for something that really needs a new 3D model
+(a piece the catalog lacks, or the project's sprites or 3D models as real 3D decor), add one friendly sentence to
+your reply saying you could model it if they install Blender (free, from blender.org, ${BLENDER_INSTALL}), and that
+you'll notice it automatically, with no restart needed. Don't mention Blender otherwise.`;
 
 const DECORATOR_PROMPT = `You are the interior designer of "Claude Office", a light, airy, modern low-poly isometric office where each room is one of the user's software projects. The user talks to you in the office to decorate a room.
 

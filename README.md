@@ -31,7 +31,8 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
 
 - **Node.js 20+** and **git** on your PATH
 - **Claude Code**, signed in. The office reads its transcripts, and the in-office agents run `claude -p`.
-- *Optional:* **Blender**, only needed when the designer models new furniture.
+- *Optional:* **Blender**, only needed when the designer models new furniture. You can install it any time; the
+  office picks it up without a restart.
 
 Developed and tested on **Windows 11**. macOS and Linux should work (paths are resolved from your home directory
 and Blender/Claude are looked up in the usual places and on PATH) but haven't been tested yet — issues welcome.
@@ -39,6 +40,8 @@ and Blender/Claude are looked up in the usual places and on PATH) but haven't be
 ## Run
 
 ```bash
+git clone https://github.com/BenVizena/claude-office
+cd claude-office
 npm install
 npm start            # http://localhost:4777
 ```
@@ -54,6 +57,10 @@ npm run uninstall       # removes both
 `install-hooks` edits your **global** `~/.claude/settings.json` (a copy is saved as `settings.json.office-backup`).
 The hook only forwards a few fields (session id, event name, tool name, cwd, a short message) to the local server and
 always exits immediately, so it never slows down or blocks Claude Code — even when the office isn't running.
+The hook script is copied to `~/.claude-office/`, so it keeps working if you move or delete the clone.
+
+The `office-todo` skill runs the to-do CLI from inside the clone. **If you move the folder, run
+`npm run install-skill` again from the new location; before deleting it, run `npm run uninstall`.**
 
 ## Costs and permissions
 
@@ -82,8 +89,10 @@ kept in memory. What the office itself saves is plain JSON/Markdown:
 - `~/.claude/office/` — `settings.json`, `decor/` (room layouts, stored relative to the walls so they survive rooms
   resizing), `room-sizes.json`, `todos/` (to-do boards), `catalog/` (furniture), `status/` (agents' status lines)
 - `~/.claude-office/staff/` — workspaces for the background agents (kept outside `~/.claude`, which Claude Code protects from edits)
+- `~/.claude-office/office-hook.mjs` — the installed hook
 
-Delete those two folders to reset the office completely.
+Delete `~/.claude/office/` and `~/.claude-office/staff/` to reset the office. To remove it entirely, run
+`npm run uninstall` first, then delete `~/.claude/office/` and `~/.claude-office/`.
 
 Nothing leaves your machine except the `claude -p` calls above. The server binds to 127.0.0.1 only, rejects requests
 whose `Host` isn't `localhost`/`127.0.0.1` (DNS-rebinding protection) and refuses cross-site requests.
@@ -91,8 +100,10 @@ Set `OFFICE_PORT` to use a port other than 4777.
 
 Settings (`~/.claude/office/settings.json`): `roomMaxAgeDays`, `sessionMaxAgeDays`, `showBackgroundSessions`,
 `hiddenProjects`, `pinnedProjects`, `chatModel`, `decorModel`, `blenderPath`, `claudePath`.
-`blenderPath` and `claudePath` are detected on first run; edit them if detection picked the wrong one
-(`claudePath` may also point at Claude Code's `cli.js`, which is then run with node).
+`claudePath` is detected on first run; edit it if detection picked the wrong one (it may also point at Claude Code's
+`cli.js`, which is then run with node). Leave `blenderPath` empty to find Blender automatically: it's looked for again
+while the office runs, so installing Blender later works without a restart. Until then the designer sticks to the
+catalog and flat art, and tells you when a request would need Blender.
 
 Usage numbers come from transcripts (main sessions + subagents). The plan-limit percentages shown by `/usage`
 are not stored locally, so they aren't on the board.

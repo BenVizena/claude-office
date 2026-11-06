@@ -3,7 +3,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
-import { PORT, REPO_DIR, CATALOG_DIR, loadSettings, saveSettings } from './config.js';
+import { PORT, REPO_DIR, CATALOG_DIR, loadSettings, saveSettings, resolveBlender } from './config.js';
 import { SessionScanner } from './scanner.js';
 import { buildOffice } from './office.js';
 import { Catalog, DecorStore } from './decor.js';
@@ -31,7 +31,7 @@ async function rebuild() {
   try {
     state = await buildOffice({ scanner, settings, hooks, decor, catalog, staff });
     state.todoBoards = listBoards().map((bd) => ({ id: bd.id, name: bd.name, items: bd.items }));
-    state.settings = { soundHint: true, showBackgroundSessions: settings.showBackgroundSessions };
+    state.settings = { soundHint: true, showBackgroundSessions: settings.showBackgroundSessions, blender: !!resolveBlender(settings) };
     broadcast({ type: 'state', state });
   } catch (e) {
     console.error('rebuild failed:', e);

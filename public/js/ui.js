@@ -271,7 +271,9 @@ export class UI {
     const conv = state.staff.conversations[key];
     const job = state.staff.jobs[key];
     return `<h2>🪴 Designer — ${esc(room.name)}</h2>
-      <p class="sub">Tell me how you'd like this room to feel. I pick from the furniture catalog, and if something's missing I can model it in Blender (you approve new pieces in the lobby).</p>
+      <p class="sub">Tell me how you'd like this room to feel. I pick from the furniture catalog${state.settings?.blender === false
+        ? ` and can hang your project's art on the walls. To have me model new furniture, install <a href="https://www.blender.org/download/" target="_blank" rel="noopener">Blender</a> (free); I'll notice it automatically.`
+        : `, and if something's missing I can model it in Blender (you approve new pieces in the lobby).`}</p>
       ${!conv?.messages?.length ? `<div class="chips">${['Make it a cozy reading nook', 'More plants and natural light', 'Japanese minimalist', 'Add a little game corner', 'Retro 70s lounge'].map((s) => `<button class="chip" data-suggest="${esc(s)}">${esc(s)}</button>`).join('')}</div>` : ''}
       ${this.chatHtml(conv, job, 'e.g. add a sofa and a big plant by the window')}
       ${conv?.messages?.length ? `<button class="ghost" data-reset="${esc(key)}">Start a fresh conversation</button>` : ''}`;

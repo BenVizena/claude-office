@@ -30,7 +30,7 @@ const DEFAULT_SETTINGS = {
   pinnedProjects: [],          // project roots to always show
   chatModel: 'sonnet',
   decorModel: 'sonnet',
-  blenderPath: findBlender(),
+  blenderPath: '',             // empty = find it automatically (re-checked, so installing Blender later just works)
   claudePath: findClaude(),
 };
 
@@ -46,6 +46,7 @@ function onPath(name) {
   return firstFile(dirs.flatMap((d) => exts.map((e) => path.join(d, name + e))));
 }
 
+/** Blender's usual install locations and PATH; null when it isn't installed. */
 function findBlender() {
   if (process.platform === 'win32') {
     for (const root of [process.env.ProgramFiles, process.env['ProgramFiles(x86)']].filter(Boolean)) {
@@ -60,7 +61,21 @@ function findBlender() {
     const hit = firstFile(['/Applications/Blender.app/Contents/MacOS/Blender', path.join(HOME, 'Applications/Blender.app/Contents/MacOS/Blender')]);
     if (hit) return hit;
   }
-  return onPath('blender') || 'blender';
+  return onPath('blender') || firstFile(['/snap/bin/blender',
+    '/var/lib/flatpak/exports/bin/org.blender.Blender', path.join(HOME, '.local/share/flatpak/exports/bin/org.blender.Blender')]);
+}
+
+let blenderCache = { key: null, at: 0, path: null };
+/** The Blender to run, or null if it isn't installed. A configured blenderPath wins if it exists; otherwise
+ *  Blender is looked for again (at most every 30s), so installing it while the office runs is picked up. */
+export function resolveBlender(settings) {
+  const want = settings.blenderPath || '';
+  if (blenderCache.key === want && Date.now() - blenderCache.at < 30000) return blenderCache.path;
+  let hit = null;
+  if (want) hit = firstFile([want]) || (!/[\\/]/.test(want) ? onPath(want) : null);
+  hit ||= findBlender();
+  blenderCache = { key: want, at: Date.now(), path: hit };
+  return hit;
 }
 
 // Returns a native executable, or a .js entry point that must be run with node (see claudeCommand).
