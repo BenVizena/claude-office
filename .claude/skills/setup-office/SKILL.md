@@ -38,9 +38,15 @@ npm run setup
 ```
 
 `npm run setup` installs the hooks and the skill, then prints a status list: one line per check, starting with `OK`,
-`MISSING` or `OPTIONAL`. Fix anything `MISSING` before going on (a `MISSING` Claude Code line means the office
-couldn't find the `claude` executable: find it with `where claude` / `which claude` and set `claudePath` in
-`~/.claude/office/settings.json`).
+`MISSING` or `OPTIONAL`. Each `MISSING` line has one documented fix; apply only that (see "When something fails"):
+
+- Node.js or git: step 1.
+- Claude Code: the office couldn't find the `claude` executable. Find it with `where claude` (Windows) or
+  `which claude`, and set `claudePath` in `~/.claude/office/settings.json` (the office's own settings, not Claude
+  Code's) to that path.
+- npm dependencies: rerun `npm install` and read its error.
+- hooks or skill: rerun `npm run setup`. If the hooks line says the Node it runs no longer exists, rerunning setup
+  fixes that too.
 
 ## 3. Offer Blender
 
@@ -73,6 +79,24 @@ command: it would stop when this Claude Code session ends. Open it in its own te
 If `npm run status` already shows the server as `OK`, it's running: skip this.
 
 Then run `npm run status` again (give it a few seconds) and check that the server line says `OK`.
+
+If the server line stays `MISSING`: on Windows and macOS, ask the user what the new terminal window shows. If port
+4777 is taken by something else, they can pick another port with the `OFFICE_PORT` environment variable; don't stop
+or kill anything yourself.
+
+## When something fails
+
+This setup changes the user's global Claude Code configuration, so stay on the documented path:
+
+- **Don't improvise fixes.** Don't edit the repo's files, don't edit `~/.claude/settings.json` by hand (the npm
+  scripts manage it and keep a backup), and don't work around a failing step another way.
+- **Never run `sudo` or anything needing admin rights yourself.** Ask the user to run the command with `!` in front.
+- **Install only what this skill lists** (Node, git, Blender), and only after the user agrees.
+- **Don't stop or kill processes**, even one sitting on port 4777. Ask.
+- **If the documented fix doesn't work, stop.** Tell the user plainly what failed, show the `npm run status` output
+  and the error, and suggest opening an issue at https://github.com/BenVizena/claude-office/issues with both.
+- **Only say setup is done when `npm run status` has no `MISSING` lines.** If something is still missing, say so and
+  what it means (for example: no hooks means statuses update more slowly).
 
 ## 5. Wrap up
 

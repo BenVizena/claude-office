@@ -15,6 +15,9 @@ const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
 // The server refreshes the copy on startup when a pull changed it (syncHookCopy).
 const HOOK_DIR = path.dirname(HOOK_FILE);
 const HOOK = HOOK_FILE.replace(/\\/g, '/');
+// Absolute node path: nvm/fnm/asdf only put `node` on PATH in interactive shells, and Claude Code started from an
+// IDE or the desktop app may not have it. `npm run status` flags it if that node later disappears.
+const NODE = process.execPath.replace(/\\/g, '/');
 const MARK = 'office-hook.mjs';
 const EVENTS = {
   SessionStart: null, SessionEnd: null, UserPromptSubmit: null, Stop: null,
@@ -52,7 +55,7 @@ function installHooks() {
   const s = stripOurs(readSettings());
   s.hooks ||= {};
   for (const [ev, matcher] of Object.entries(EVENTS)) {
-    const entry = { hooks: [{ type: 'command', command: `node "${HOOK}"`, timeout: 5 }] };
+    const entry = { hooks: [{ type: 'command', command: `"${NODE}" "${HOOK}"`, timeout: 5 }] };
     if (matcher) entry.matcher = matcher;
     (s.hooks[ev] ||= []).push(entry);
   }
@@ -153,7 +156,11 @@ function version(cmd, args) {
 async function status() {
   const settings = loadSettings();
   const s = readSettings();
-  const hooksIn = JSON.stringify(s.hooks || {}).includes(HOOK);
+  const ours = Object.values(s.hooks || {}).flat().flatMap((m) => m.hooks || [])
+    .map((h) => String(h.command || '')).filter((c) => c.includes(MARK));
+  const hooksIn = ours.some((c) => c.includes(HOOK));
+  const hookNode = ours[0]?.match(/^"([^"]+)"/)?.[1]; // absent for old `node "..."` installs
+  const hookNodeOk = !hookNode || fs.existsSync(hookNode);
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   const git = version('git', ['--version']);
   const claude = settings.claudePath;
@@ -164,7 +171,8 @@ async function status() {
     [!!git, git || 'git not found on PATH'],
     [claudeOk, claudeOk ? `Claude Code: ${claude}` : `Claude Code not found (claudePath = ${claude})`],
     [fs.existsSync(path.join(REPO_DIR, 'node_modules', 'ws')), 'npm dependencies installed'],
-    [hooksIn && fs.existsSync(HOOK_FILE), `hooks in ${SETTINGS}`],
+    [hooksIn && fs.existsSync(HOOK_FILE) && hookNodeOk, hookNodeOk ? `hooks in ${SETTINGS}`
+      : `hooks run ${hookNode}, which no longer exists (Node moved or upgraded): run npm run setup again`],
     [fs.existsSync(path.join(SKILL_DIR, 'SKILL.md')), `office-todo skill in ${SKILL_DIR}`],
     [blender ? true : 'optional', blender ? `Blender: ${blender}` : 'Blender not installed (only needed to model new furniture)'],
     [await serverUp() ? true : 'optional', `office server on http://localhost:${PORT}`],
