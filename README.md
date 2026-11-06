@@ -18,6 +18,9 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
 - **Dust and cobwebs** collect on desks (and rooms) that haven't been touched in days.
 - **Boards**: project + branch boards in every room, a to-do board per project (with a Tree tab: drag to nest and reorder, draw dependency arrows), and in the lobby: office overview,
   usage, efficiency tips, office-wide to-dos and new-furniture approvals.
+- **Agents keep the boards up to date themselves.** With the `office-todo` skill installed, your sessions claim the
+  to-dos they're working on, split big ones into subtasks, attach notes on what they found, mark items done or
+  blocked, and set their own speech bubble. They raise a ✋ only when they need a decision from you.
 - **The designer** by each door redecorates the room on request (background `claude -p` on your subscription). It
   picks from a catalog and can model missing pieces in Blender; new pieces wait for your approval in the lobby.
   It can read the room's project folder and reuse its art: game sprites become chunky voxel 3D models
