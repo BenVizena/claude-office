@@ -150,3 +150,31 @@ describe('office-todo wait', () => {
     assert.ok(following.pending.some((e) => e.kind === 'takeover' && e.shownAt));
   });
 });
+
+describe('handoff notes', () => {
+  test('show lists the items that wait on it, and done reminds you to hand off', () => {
+    const first = json(b('add', 'Lay the pipe'));
+    const next = json(b('add', 'Turn on the water'));
+    ok(b('depend', next.id, '--on', first.id));
+    assert.ok(ok(b("show", first.id)).includes(`needed by (these wait on it): ${next.id} "Turn on the water"`));
+    assert.deepEqual(json(b('show', first.id)).neededBy, [next.id]);
+    assert.doesNotMatch(ok(b('show', next.id)), /needed by/);
+    const out = ok(b('done', first.id));
+    assert.match(out, new RegExp(`handoff: ${next.id} "Turn on the water" waited on this`));
+    assert.match(out, /context <id>/);
+  });
+});
+
+describe('check commands', () => {
+  test('a session sets a check that waits for the user to approve it', () => {
+    const it = json(b('add', 'Make the tests pass'));
+    assert.match(ok(b('check', it.id)), /no check/);
+    assert.match(ok(b('check', it.id, 'npm', 'test')), /check for "Make the tests pass": npm test[\s\S]*once the user approves it/);
+    const got = readBoard(BOARD).items.find((x) => x.id === it.id).check;
+    assert.equal(got.cmd, 'npm test');
+    assert.equal(got.approved, false);
+    assert.match(ok(b('list')), /check: npm test \(not approved by the user yet\)/);
+    assert.match(ok(b('check', it.id, '--clear')), /has no check now/);
+    assert.equal(readBoard(BOARD).items.find((x) => x.id === it.id).check, undefined);
+  });
+});

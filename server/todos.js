@@ -2,7 +2,8 @@
 // Shared by the server and bin/office-todo.js, so writes take a lock file.
 //
 // Item: { id, text, status: todo|doing|blocked|done, priority, parent?, order?, blockedBy?: [ids], by, bySession?,
-//         claim?: { by, session, at, ended?, pending? }, createdAt, updatedAt, completedAt?, completedBy?, note? }
+//         claim?: { by, session, at, ended?, pending? }, createdAt, updatedAt, completedAt?, completedBy?, note?,
+//         check?: { cmd, by, at, approved, last?: { ok, code, ms, at } }, launch?: { session, worktree, at } }
 // parent makes a subtask tree; blockedBy are dependencies ("can't start until those are done") across the board.
 // order sorts siblings once someone has arranged them by hand.
 import fs from 'node:fs';
@@ -74,6 +75,11 @@ export function sortSiblings(list) {
 /** Blockers of an item that aren't done yet. */
 export function openBlockers(board, it) {
   return (it.blockedBy || []).map((id) => board.items.find((x) => x.id === id)).filter((x) => x && x.status !== 'done');
+}
+
+/** Open items that wait on this one: who a finishing session should leave a handoff note for. */
+export function dependents(board, it) {
+  return board.items.filter((x) => x.status !== 'done' && (x.blockedBy || []).includes(it.id));
 }
 
 /** After `changed` was finished/reopened/removed: items it was blocking get blocked or unblocked to match. */
@@ -165,6 +171,7 @@ export function updateItem(slug, id, patch) {
     const freed = syncBlocked(b);
     const result = { ...it };
     if (freed.length) result.unblocked = freed.map((x) => `${x.id} "${x.text}"`);
+    if (it.status === 'done') { const next = dependents(b, it); if (next.length) result.dependents = next.map((x) => `${x.id} "${x.text}"`); }
     const sibs = it.parent ? children(b, it.parent) : [];
     if (it.status === 'done' && sibs.length && sibs.every((s) => s.status === 'done')) {
       const p = b.items.find((x) => x.id === it.parent);
@@ -227,6 +234,60 @@ export function markSessionClaims(sessionId, ended) {
     });
   }
   return changed;
+}
+
+// ---------------- check commands ----------------
+// An item can carry a shell command that verifies it is really done (`npm test`, `git diff --quiet`). A worker runs it
+// itself before `done`; auto-advance runs it on the server before starting the next item. The server only ever runs
+// a check the user approved: one a session set stays unapproved until the user approves it in the office, so a
+// session can't use the board to run commands outside its own permission prompts.
+export const CHECK_MAX = 500;
+
+/** cmd '' removes the check. approved: true only for the user's own edits (the office UI). Changing it resets approval. */
+export function setCheck(slug, id, { cmd, by = 'you', session, approved = false }) {
+  const c = String(cmd ?? '').trim();
+  if (/[\r\n]/.test(c)) throw new Error('the check is one command line (chain steps with && if you need several)');
+  if (c.length > CHECK_MAX) throw new Error(`keep the check under ${CHECK_MAX} characters (put a longer one in a script)`);
+  return mutate(slug, null, (b) => {
+    const it = find(b, id);
+    if (!c) delete it.check;
+    else it.check = { cmd: c, by, ...(session ? { session } : {}), at: Date.now(), approved: !!approved };
+    it.updatedAt = Date.now();
+    it.updatedBy = by;
+    return { ...it };
+  });
+}
+
+/** The user approves the check as it stands now (expected = the command they saw, so a quiet swap can't be approved). */
+export function approveCheck(slug, id, expected) {
+  return mutate(slug, null, (b) => {
+    const it = find(b, id);
+    if (!it.check) throw new Error('that item has no check');
+    if (expected !== undefined && it.check.cmd !== expected) throw new Error('the check changed since you looked at it: have another look');
+    it.check.approved = true;
+    it.check.approvedAt = Date.now();
+    it.updatedAt = Date.now();
+    return { ...it };
+  });
+}
+
+/** Remember how the last run of an item's check went (shown on the item). */
+export function recordCheck(slug, id, { ok, code, ms }) {
+  return mutate(slug, null, (b) => {
+    const it = find(b, id);
+    if (!it.check) return null;
+    it.check.last = { ok: !!ok, code: code ?? null, ms: ms ?? null, at: Date.now() };
+    return { ...it };
+  });
+}
+
+/** Where a ▶ launch put the item's session (its check runs there). */
+export function recordLaunch(slug, id, { session, worktree }) {
+  return mutate(slug, null, (b) => {
+    const it = find(b, id);
+    it.launch = { session, worktree, at: Date.now() };
+    return { ...it };
+  });
 }
 
 /** Removes an item and all of its subtasks. */

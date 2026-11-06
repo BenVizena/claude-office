@@ -46,6 +46,7 @@ function itemRow(it, board, v, sessions, depth) {
           ${ch.length ? `<span class="td-prog" title="${done} of ${ch.length} subtasks done"><span style="width:${(done / ch.length) * 100}%"></span></span><span class="sub">${done}/${ch.length}</span>` : ''}
           ${it.details ? `<button class="td-link" data-todo-toggle="${it.id}">📎 ${it.details} background</button>` : ''}
           ${it.note ? `<span class="sub">· ${esc(it.note)}</span>` : ''}
+          ${checkChip(it, board, v)}
         </div>
       </div>
       <div class="td-actions">
@@ -63,6 +64,34 @@ function itemRow(it, board, v, sessions, depth) {
   return row + ch.map((c) => itemRow(c, board, v, sessions, depth + 1)).join('');
 }
 
+/** The item's check command: approve it (if a session set it), run it, and how it went last time. */
+function checkChip(it, board, v) {
+  const c = it.check;
+  if (!c) return '';
+  const running = v.checksRunning?.has(`${board.id}:${it.id}`);
+  const last = c.last ? (c.last.ok ? `<span class="chip working" title="Passed ${ago(c.last.at)}">✓ passed</span>` : `<span class="chip needs_you" title="Failed ${ago(c.last.at)} (exit ${c.last.code ?? '?'}); the output is in its background">✗ failed</span>`) : '';
+  return `<span class="chip check ${c.approved ? '' : 'needs_you'}" title="${c.approved ? 'Runs before anything that depends on this starts in a sequence' : 'Set by a session. The office runs it only after you approve it.'}">🧪 <code>${esc(c.cmd)}</code></span>${last}
+    ${c.approved
+      ? (running ? '<span class="sub">running…</span>' : `<button class="td-link" data-todo-run-check="${it.id}" title="Run it now (in ${esc(it.launch?.worktree || 'the project folder')})">run</button>`)
+      : `<button class="td-link" data-todo-approve-check="${it.id}" data-cmd="${esc(c.cmd)}" title="Let the office run this command">approve</button>`}`;
+}
+
+/** Banner for a sequence on this board: what it is doing, why it stopped, and its recent log. */
+export function runBannerHtml(board) {
+  const r = board.run;
+  if (!r) return '';
+  const cur = r.current && board.items.find((x) => x.id === r.current.id);
+  const phase = { launching: 'starting a session', working: 'working', checking: 'running its check' }[r.current?.phase] || '';
+  const head = r.stopped
+    ? `<b>${r.stopped.ok ? '✓ Sequence finished' : '✋ Sequence stopped'}</b> <span class="sub">${esc(r.stopped.reason)}</span>`
+    : `<b>▶▶ Sequence from “${esc(r.rootText || r.root)}”</b> <span class="sub">step ${r.steps + (r.current ? 1 : 0)} of up to ${r.max}${cur ? ` · “${esc(cur.text)}”: ${phase}${cur.status === 'done' && r.current.phase === 'working' ? ' (done, waiting for its session to finish its turn)' : ''}` : ''}</span>`;
+  return `<div class="td-run ${r.stopped ? (r.stopped.ok ? 'ok' : 'stopped') : 'running'}">
+      <div class="td-run-head">${head}<span class="spacer"></span>
+        <button class="${r.stopped ? 'ghost' : ''}" data-todo-run-stop="1" title="${r.stopped ? 'Clear this off the board' : "Don't start anything else (the current session keeps going)"}">${r.stopped ? 'Dismiss' : 'Stop'}</button></div>
+      <details><summary class="sub">log</summary>${(r.log || []).slice().reverse().map((l) => `<div class="sub">${new Date(l.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} · ${esc(l.text)}</div>`).join('')}</details>
+    </div>`;
+}
+
 /** Confirm row for "start a session on this": pick the worktree; the session opens in a terminal window. */
 function startRow(it, v, depth) {
   const pods = v.pods;
@@ -73,6 +102,9 @@ function startRow(it, v, depth) {
         ? `<select data-start-wt="${it.id}">${pods.map((p) => `<option value="${esc(p.path)}">${esc(label(p))}</option>`).join('')}</select>`
         : `<span class="mono" data-start-wt="${it.id}" data-value="${esc(pods[0].path)}">${esc(label(pods[0]))}</span>`}
       <span class="sub">It opens in a terminal window with the item claimed; you approve its permissions there as usual.</span>
+      ${v.runActive ? '<span class="sub">(A sequence is already running on this board.)</span>' : `<label class="sub" title="When this is done, verified and its session's turn is over, the office starts the next ready item that waits on it (or its next subtask) in a new session. It stops on anything else: blocked, released, a failed or unapproved check, or the cap.">
+        <input type="checkbox" data-start-seq="${it.id}" /> then keep going: start what waits on it, one at a time, up to
+        <input type="number" data-start-max="${it.id}" value="5" min="1" max="20" style="width:3.5em" /> steps</label>`}
       <button class="ghost" data-todo-start-cancel="${it.id}">Cancel</button>
       <button class="primary" data-todo-start-go="${it.id}">Start</button>
     </div>`;
@@ -83,6 +115,7 @@ function editRow(it, depth) {
       <div class="td-edit">
         <input type="text" data-keep="edit-title-${it.id}" data-edit-for="${it.id}" data-field="text" value="${esc(it.text)}" maxlength="300" placeholder="Title" />
         <input type="text" data-keep="edit-summary-${it.id}" data-edit-for="${it.id}" data-field="summary" value="${esc(it.summary || '')}" maxlength="200" placeholder="One-line summary for context (optional)" />
+        <input type="text" data-keep="edit-check-${it.id}" data-edit-for="${it.id}" data-field="check" value="${esc(it.check?.cmd || '')}" maxlength="500" placeholder="Check command that proves it is done, e.g. npm test (optional)" class="mono" />
         <div class="td-edit-row">
           <label class="sub">Priority <select data-edit-for="${it.id}" data-field="priority">${['low', 'normal', 'high'].map((p) => `<option value="${p}" ${p === (it.priority || 'normal') ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
           <span class="spacer"></span>
@@ -114,7 +147,7 @@ export function openTabHtml(board, v, sessions) {
   // roots still open (or with open subtasks)
   const hasOpen = (it) => it.status !== 'done' || kids(board, it.id).some(hasOpen);
   const roots = sortSibs(board.items.filter((it) => (!it.parent || !board.items.some((x) => x.id === it.parent)) && hasOpen(it)));
-  return `<div class="add-row"><input type="text" data-keep="todo" placeholder="Add a to-do…" /><button class="primary" data-todo-add>Add</button></div>
+  return `${runBannerHtml(board)}<div class="add-row"><input type="text" data-keep="todo" placeholder="Add a to-do…" /><button class="primary" data-todo-add>Add</button></div>
     <div class="td-list">${roots.map((it) => itemRow(it, board, v, sessions, 0)).join('') || '<p class="sub">Nothing open. 🎉</p>'}</div>`;
 }
 

@@ -250,6 +250,8 @@ export class UI {
     const sessions = sessionIndex(state);
     const tab = v.tab || 'open';
     // worktrees a "start a session on this" can open in (project boards only)
+    v.checksRunning = new Set(state.checksRunning || []);
+    v.runActive = !!(board.run && !board.run.stopped);
     v.pods = !lobby && room.kind === 'project' ? room.pods.filter((p) => !p.removed).map(({ path, branch, detached, isMain }) => ({ path, branch, detached, isMain })) : [];
     // refresh open background panels when agents add more
     for (const id of v.expanded || []) {
@@ -405,9 +407,16 @@ export class UI {
         const el = $(`[data-start-wt="${d.todoStartGo}"]`, this.body);
         const worktree = el?.value || el?.dataset.value;
         t.disabled = true;
-        await api('/api/todos/start', { board: v.board, id: d.todoStartGo, worktree });
+        const seq = $(`[data-start-seq="${d.todoStartGo}"]`, this.body);
+        if (seq?.checked) await api('/api/todos/run', { board: v.board, id: d.todoStartGo, worktree, max: Number($(`[data-start-max="${d.todoStartGo}"]`, this.body)?.value) || 5 });
+        else await api('/api/todos/start', { board: v.board, id: d.todoStartGo, worktree });
         v.starting = null; this.render(false);
       }
+      else if (d.todoApproveCheck) {
+        if (confirm(`Let the office run this command in the project folder?\n\n${d.cmd}\n\nIt runs before anything that depends on this item starts in a sequence, and when you press "run".`)) await api('/api/todos', { board: v.board, action: 'approve-check', id: d.todoApproveCheck, cmd: d.cmd });
+      }
+      else if (d.todoRunCheck) await api('/api/todos/check/run', { board: v.board, id: d.todoRunCheck });
+      else if (d.todoRunStop) await api('/api/todos/run/stop', { board: v.board });
       else if (d.todoReopen) await api('/api/todos', { board: boardOf(), action: 'update', id: d.todoReopen, patch: { status: 'todo' } });
     } catch (err) { alert(err.message); }
   }
@@ -417,6 +426,10 @@ export class UI {
     const val = (f) => $(`[data-edit-for="${id}"][data-field="${f}"]`, this.body)?.value;
     const patch = { text: val('text'), summary: val('summary'), priority: val('priority') };
     await api('/api/todos', { board: v.board, action: 'update', id, patch });
+    // the check is the user's own when they type it here (approved); left unchanged, a session's unapproved one stays so
+    const cur = (this.getState()?.todoBoards || []).find((b) => b.id === v.board)?.items.find((x) => x.id === id)?.check?.cmd || '';
+    const check = (val('check') ?? cur).trim();
+    if (check !== cur) await api('/api/todos', { board: v.board, action: 'check', id, cmd: check });
     v.editing = null;
     // the edit inputs use data-keep, so drop their remembered values
     for (const el of this.body.querySelectorAll(`[data-edit-for="${id}"]`)) el.removeAttribute('data-keep');
@@ -467,7 +480,7 @@ export class UI {
       }
       return;
     }
-    const tt = e.target.closest('[data-tab],[data-group],[data-scope],[data-todo-edit],[data-todo-save],[data-todo-cancel],[data-todo-toggle],[data-todo-sub],[data-todo-addsub],[data-todo-claim],[data-todo-release],[data-todo-note],[data-todo-reopen],[data-todo-start],[data-todo-start-cancel],[data-todo-start-go]');
+    const tt = e.target.closest('[data-tab],[data-group],[data-scope],[data-todo-edit],[data-todo-save],[data-todo-cancel],[data-todo-toggle],[data-todo-sub],[data-todo-addsub],[data-todo-claim],[data-todo-release],[data-todo-note],[data-todo-reopen],[data-todo-start],[data-todo-start-cancel],[data-todo-start-go],[data-todo-approve-check],[data-todo-run-check],[data-todo-run-stop]');
     if (tt) { e.preventDefault(); await this.onTodoClick(tt); return; }
     const r = e.target.closest('[data-range]');
     if (r) { this.current.range = r.dataset.range; this.render(false); return; }

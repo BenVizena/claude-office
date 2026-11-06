@@ -27,7 +27,18 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
   When a session ends, its claims are marked "session ended" so another session can take them without `--force`.
 - **▶ Start a session on an item.** On a project board, ▶ opens a terminal window running `claude` in the worktree
   you pick, with the item already claimed for it. It's an ordinary interactive session: you approve its permissions
-  as usual.
+  as usual. Before marking its item done, a session leaves a handoff note on every item that waits on it.
+- **Checks.** An item can carry a command that proves it is done (`npm test`). Set one in the item's edit row, or a
+  session sets one with `office-todo check <id> "..."`. The office only runs a check you approved (your own are
+  approved as you type them; one a session set shows an *approve* button), so sessions can't use the board to run
+  commands outside their own permission prompts. *run* on the item runs it now; its output goes into the background.
+- **Run in sequence.** In the ▶ dialog, tick *then keep going* to have the office work through the item, its
+  subtasks and everything that waits on them, one fresh session at a time, up to a cap (default 5). It starts the
+  next item only once the current one is done, its session's turn is over and its check passed. It stops and asks
+  for you (✋ at that session's desk) if an item is blocked, released, reopened or taken over, its session ended,
+  its check failed (the item goes back to in progress, with the output attached) or isn't approved. No Claude
+  session orchestrates it, so waiting costs no tokens. Finished sessions' windows stay open; close them when you
+  like. Only the office UI can start a sequence.
 - **Results.** Sessions can post charts, tables, images and short notes (test runs, benchmarks, training metrics)
   with `office-todo results …`, partial results included. A small screen with a live sparkline goes up on the
   agent's desk and a "📊 View results" tab sits above its speech bubble; click either to open the results window.

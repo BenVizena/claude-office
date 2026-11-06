@@ -3,12 +3,15 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
-import { PORT, REPO_DIR, CATALOG_DIR, loadSettings, saveSettings, resolveBlender, syncHookCopy } from './config.js';
+import { PORT, REPO_DIR, CATALOG_DIR, normPath, loadSettings, saveSettings, resolveBlender, syncHookCopy } from './config.js';
 import { SessionScanner } from './scanner.js';
 import { buildOffice } from './office.js';
 import { Catalog, DecorStore } from './decor.js';
 import { Staff } from './staff.js';
-import { addItem, updateItem, removeItem, claimItem, releaseItem, addDetail, readDetails, listBoards, moveItem, addDependency, removeDependency, markSessionClaims } from './todos.js';
+import { addItem, updateItem, removeItem, claimItem, releaseItem, addDetail, readDetails, listBoards, moveItem, addDependency, removeDependency, markSessionClaims, setCheck, approveCheck, recordCheck, readBoard } from './todos.js';
+import { runCheck, checkDir } from './checks.js';
+import { startRun, stopRun, makeRunner } from './chain.js';
+import { setStatus } from './status.js';
 import { boardNews } from './nudges.js';
 import { ack as ackNews, markEnded as markNewsEnded, scanAll } from './news.js';
 import { startOnItem } from './launch.js';
@@ -38,7 +41,8 @@ async function rebuild() {
   try {
     state = await buildOffice({ scanner, settings, hooks, decor, catalog, staff });
     const boards = listBoards();
-    state.todoBoards = boards.map((bd) => ({ id: bd.id, name: bd.name, items: bd.items }));
+    state.todoBoards = boards.map((bd) => ({ id: bd.id, name: bd.name, items: bd.items, run: bd.run || null }));
+    state.checksRunning = [...checksRunning];
     attachNews(state, boards);
     state.settings = { soundHint: true, showBackgroundSessions: settings.showBackgroundSessions, blender: !!resolveBlender(settings) };
     broadcast({ type: 'state', state });
@@ -54,9 +58,24 @@ function attachNews(st, boards) {
   for (const room of st.rooms) for (const pod of room.pods) for (const s of pod.sessions) s.news = pending.get(s.id) || [];
 }
 
+// ---- sequences ("run in sequence" from the board, see chain.js) ----
+const checksRunning = new Set(); // "board:id" of checks the user started by hand
+const runSequences = makeRunner(
+  () => listBoards().filter((bd) => bd.run && !bd.run.stopped).map((bd) => bd.id),
+  {
+    hookOf: (session) => hooks.get(session),
+    launch: ({ slug, id, worktree, step, max }) => whenUnlocked(() => startOnItem({ room: findRoom(slug), id, worktree, claudePath: settings.claudePath, step: { n: step, max } })),
+    runCheck: (cmd, cwd) => runCheck(cmd, cwd),
+    notify: (session, st) => setStatus(session, { ...st, mood: st.needsYou ? '✋' : '🎉' }),
+    changed: () => markDirty(),
+  },
+);
+
 // ---- polling loop ----
 let lastFull = 0;
+let lastSeq = 0;
 setInterval(() => {
+  if (Date.now() - lastSeq > 3000) { lastSeq = Date.now(); runSequences(); }
   if (scanner.scan()) dirty = true;
   // statuses depend on elapsed time, so refresh every few seconds regardless
   if (dirty || Date.now() - lastFull > 5000) { dirty = false; lastFull = Date.now(); rebuild(); }
@@ -133,6 +152,7 @@ const routes = {
         .then((n) => { if (n) markDirty(); })
         .catch((e) => console.error('claim update failed:', e.message));
     }
+    if (ev === 'Stop' || ev === 'SessionEnd') setTimeout(runSequences, 500); // a sequence step may be able to move on
     markDirty();
     return news ? { ok: true, context: news.context, upTo: news.upTo } : { ok: true };
   },
@@ -167,6 +187,9 @@ const routes = {
       if (b.action === 'move') return moveItem(slug, b.id, b.parent || null, { by: 'you', before: b.before, after: b.after });
       if (b.action === 'depend') return addDependency(slug, b.id, b.on, { by: 'you' });
       if (b.action === 'undepend') return removeDependency(slug, b.id, b.on, { by: 'you' });
+      // the user's own check is approved as they type it; one a session set waits for 'approve-check'
+      if (b.action === 'check') return setCheck(slug, b.id, { cmd: b.cmd, by: 'you', approved: true });
+      if (b.action === 'approve-check') return approveCheck(slug, b.id, b.cmd === undefined ? undefined : String(b.cmd));
       throw new Error('unknown action');
     });
     markDirty();
@@ -179,6 +202,38 @@ const routes = {
     markDirty();
     return r;
   },
+
+  // run an item's (approved) check now; the result lands on the item
+  'POST /api/todos/check/run': async (b) => {
+    const slug = String(b.board), key = `${slug}:${b.id}`;
+    const board = readBoard(slug);
+    const it = board.items.find((x) => x.id === b.id);
+    if (!it?.check) throw new Error('that item has no check');
+    if (!it.check.approved) throw new Error('approve the check first');
+    if (checksRunning.has(key)) throw new Error('its check is already running');
+    const cwd = checkDir(board, it);
+    if (!cwd) throw new Error('no folder to run it in');
+    checksRunning.add(key);
+    markDirty();
+    runCheck(it.check.cmd, cwd).then((res) => whenUnlocked(() => {
+      recordCheck(slug, it.id, res);
+      addDetail(slug, it.id, { by: 'office', kind: 'log', title: `check ${res.ok ? 'passed' : `failed (exit ${res.code ?? '?'})`}: ${it.check.cmd}`, text: res.output || '(no output)' });
+    })).catch((e) => console.error('check failed to run:', e.message)).finally(() => { checksRunning.delete(key); markDirty(); });
+    return { ok: true, cwd };
+  },
+
+  // "run in sequence": start a run on an item (the office ▶s it and whatever follows from it, one at a time)
+  'POST /api/todos/run': async (b) => {
+    const room = findRoom(String(b.board));
+    if (room?.kind !== 'project') throw new Error('sequences run on project boards');
+    const pod = room.pods.find((p) => !p.removed && normPath(p.path) === normPath(String(b.worktree || '')));
+    if (!pod) throw new Error('that worktree is not part of this project');
+    const r = await whenUnlocked(() => startRun(room.key, { root: String(b.id), worktree: pod.path, max: b.max }));
+    markDirty();
+    setTimeout(runSequences, 50);
+    return r;
+  },
+  'POST /api/todos/run/stop': async (b) => { const r = await whenUnlocked(() => stopRun(String(b.board))); markDirty(); return r || { ok: true }; },
 
   'POST /api/decorate': async (b) => {
     const room = findRoom(b.room);

@@ -13,6 +13,7 @@
 //   status --clear | status            clear / show it
 //   move <id> --parent <id> | --root   re-parent an existing item (keeps its id, claim and background)
 //        [--before <id> | --after <id>]  ...and/or place it next to a sibling
+//   check <id> "npm test" | --clear  a command that verifies it is done (the user approves it before the office runs it)
 //   depend <id> --on <id>             <id> can't start until the other is done (marks it blocked meanwhile)
 //   undepend <id> --on <id>           remove that dependency
 //   edit <id> [--text "new title"] [--priority low|normal|high] [--summary "one line of context" | --summary ""]
@@ -32,7 +33,7 @@ import fs from 'node:fs';
 import { projectSlug } from '../server/config.js';
 import { setStatus, clearStatus, readStatus } from '../server/status.js';
 import {
-  readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, moveItem, addDependency, removeDependency, openBlockers, claimIsStale,
+  readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, moveItem, addDependency, removeDependency, openBlockers, claimIsStale, dependents, setCheck,
 } from '../server/todos.js';
 import { subscribe, unsubscribe, scan, markShown, subCount, watcherBeat, WATCHER_BEAT_MS } from '../server/news.js';
 import {
@@ -99,7 +100,8 @@ function line(it, board, indent = '') {
   const prog = kids.length ? ` (${kids.filter((k) => k.status === 'done').length}/${kids.length} subtasks)` : '';
   const pri = it.priority && it.priority !== 'normal' ? ` [${it.priority}]` : '';
   const claim = it.claim ? `  ← claimed by ${it.claim.session === session && session ? 'you' : it.claim.by}${it.claim.ended ? ' (session ended — free to take over)' : it.claim.pending ? (claimIsStale(it.claim) ? ' (its session never started — free to take over)' : ' (session starting…)') : ''}` : '';
-  const note = (it.summary ? `\n${indent}      ${it.summary}` : '') + (it.note ? `\n${indent}      note: ${it.note}` : '');
+  const note = (it.summary ? `\n${indent}      ${it.summary}` : '') + (it.note ? `\n${indent}      note: ${it.note}` : '')
+    + (it.check ? `\n${indent}      check: ${it.check.cmd}${it.check.approved ? '' : ' (not approved by the user yet)'}${it.check.last ? ` — last run ${it.check.last.ok ? 'passed' : 'FAILED'}` : ''}` : '');
   const waits = board.items?.length ? openBlockers(board, it) : [];
   const dep = waits.length ? `  ⛔ waits on ${waits.map((w) => w.id).join(', ')}` : '';
   return `${indent}${MARK[it.status] || '[?]'} ${it.id}  ${it.text}${pri}${prog}${claim}${dep}${note}`;
@@ -170,6 +172,10 @@ function print(x, board) {
     console.log(line(x, board || { items: [] }));
     if (x.hint) console.log(`hint: ${x.hint}`);
     if (x.unblocked) console.log(`unblocked (no longer waiting): ${x.unblocked.join(", ")}`);
+    if (x.dependents) {
+      console.log(`handoff: ${x.dependents.join(', ')} waited on this. If the session that picks ${x.dependents.length > 1 ? 'them' : 'it'} up `
+        + 'needs anything you learned (what changed, where things are, a change of plan), leave it now with `context <id> "..."`.');
+    }
     return;
   }
   console.log(x);
@@ -363,8 +369,10 @@ try {
       const it = b.items.find((x) => x.id === id) || b.items.find((x) => x.id.startsWith(id));
       if (!it) throw new Error(`no item ${id}`);
       const det = readDetails(slug, it.id);
-      if (flags.json) { print({ ...it, subtasks: children(b, it.id), background: det }); break; }
+      const next = dependents(b, it);
+      if (flags.json) { print({ ...it, subtasks: children(b, it.id), neededBy: next.map((x) => x.id), background: det }); break; }
       console.log(tree(b, [it, ...b.items.filter((x) => { for (let p = x; p?.parent; p = b.items.find((q) => q.id === p.parent)) if (p.parent === it.id) return true; return false; })]));
+      if (next.length) console.log(`\nneeded by (these wait on it): ${next.map((x) => `${x.id} "${x.text}"`).join(', ')}`);
       for (const d of det) console.log(`
 --- ${d.kind}${d.title ? `: ${d.title}` : ''} (${d.by}, ${new Date(d.at).toLocaleString()})
 ${d.text}`);
@@ -377,6 +385,21 @@ ${d.text}`);
       const b = readBoard(slug);
       const p = r.parent && b.items.find((x) => x.id === r.parent);
       console.log(p ? `moved "${r.text}" under "${p.text}" (${p.id})` : `moved "${r.text}" to the top level`);
+      break;
+    }
+    case 'check': {
+      need();
+      const cmdText = flags.clear ? '' : rest.slice(1).join(' ');
+      if (!cmdText && !flags.clear) {
+        const it = readBoard(slug).items.find((x) => x.id === id || x.id.startsWith(id));
+        if (!it) throw new Error(`no item ${id}`);
+        console.log(it.check ? `${it.check.cmd}${it.check.approved ? '' : '  (not approved by the user yet)'}` : 'no check (set one: office-todo check <id> "npm test")');
+        break;
+      }
+      const r = setCheck(slug, id, { cmd: cmdText, by, session });
+      console.log(r.check
+        ? `check for "${r.text}": ${r.check.cmd}\nRun it yourself before \`done\`. The office only runs it (before starting what depends on this) once the user approves it in the office.`
+        : `"${r.text}" has no check now`);
       break;
     }
     case 'depend': case 'undepend': {

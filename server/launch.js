@@ -7,27 +7,36 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { STAFF_DIR, REPO_DIR, claudeCommand, normPath } from './config.js';
-import { claimItem, releaseItem, readBoard, claimIsStale } from './todos.js';
+import { claimItem, releaseItem, readBoard, claimIsStale, recordLaunch } from './todos.js';
 import { subscribe } from './news.js';
 
 const LAUNCH_DIR = path.join(STAFF_DIR, '..', 'launch');
 const CLI = path.join(REPO_DIR, 'bin', 'office-todo.js').replace(/\\/g, '/');
 
-function promptFor(board, id) {
+function promptFor(board, id, step) {
   return `You were started from the Claude Office to-do board to work on item ${id} (board ${board}). `
     + `It is already claimed for this session. First run: node "${CLI}" show ${id} `
     + '- it has the task, its subtasks and any background other sessions left. Then do the work, following the office-todo skill '
-    + `(update your status, add follow-ups you notice). When it is finished and verified, run: node "${CLI}" done ${id}. `
+    + '(update your status, add follow-ups you notice). Before you mark it done, leave a handoff note on each item that waits on '
+    + 'this one (show lists them under "needed by"): `context <their id> "..."` with what its session would otherwise have to '
+    + 'rediscover - what changed, where things are, decisions and why. If one of them should not go ahead as written any more, '
+    + '`block` it with the reason instead. '
+    + 'If show lists a check command for it, run that yourself and only mark it done once it passes (the office runs it again '
+    + 'before anything that depends on it starts). '
+    + `When it is finished and verified, run: node "${CLI}" done ${id}. `
     + 'If you cannot finish it, leave what you found as background with `context` and release it. '
     + `Right away, also start node "${CLI}" wait as a background command (run_in_background): it uses no tokens while it waits and `
     + 'finishes when an item you follow changes (unblocked, finished by someone else, your claim taken over), printing what happened '
     + '- start it again whenever it finishes and says you still follow items. If your claim is taken over, stop and check with `show`. '
     + 'If the item still waits on other items (show marks them "waits on"), do not work around them: set your status to waiting '
-    + 'and end your turn; the watcher wakes you when they are done.';
+    + 'and end your turn; the watcher wakes you when they are done.'
+    + (step ? ` This is step ${step.n} of up to ${step.max} in a sequence the user started from the board. Do only this item: once it `
+      + 'is done (handoff notes left), end your turn and stop. The office then runs its check and starts the next item in a new '
+      + 'session, so do not start other items yourself.' : '');
 }
 
 /** Throws with a readable message when the item can't be started. Returns { session, worktree }. */
-export function startOnItem({ room, id, worktree, claudePath }) {
+export function startOnItem({ room, id, worktree, claudePath, step }) {
   if (room?.kind !== 'project') throw new Error('sessions can only be started on a project board');
   const pod = room.pods.find((p) => !p.removed && normPath(p.path) === normPath(worktree));
   if (!pod) throw new Error('that worktree is not part of this project');
@@ -43,8 +52,9 @@ export function startOnItem({ room, id, worktree, claudePath }) {
   // follow the item from now, so news from before the session's first hook isn't missed (best effort: never retried,
   // since a retry would launch a second session)
   try { subscribe(session, readBoard(room.key), id, 'claim'); } catch { /* the office subscribes it on its first hook */ }
+  try { recordLaunch(room.key, id, { session, worktree: pod.path }); } catch { /* only used to pick where its check runs */ }
   try {
-    openTerminal({ cwd: pod.path, claudePath, args: ['--session-id', session, promptFor(room.key, id)], title: `Claude: ${room.name} ${id}`, session });
+    openTerminal({ cwd: pod.path, claudePath, args: ['--session-id', session, promptFor(room.key, id, step)], title: `Claude: ${room.name} ${id}${step ? ` (step ${step.n})` : ''}`, session });
   } catch (e) {
     releaseItem(room.key, id, { by: 'office' });
     throw e;

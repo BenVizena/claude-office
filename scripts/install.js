@@ -86,6 +86,7 @@ ${T} add "Short imperative task" [--parent <id>] [--priority low|normal|high] [-
 ${T} edit <id> [--text "better title"] [--priority low|normal|high] [--summary "..." | --summary ""]
 ${T} move <id> --parent <id>        # nest an existing item under another (or --root); keeps id + background
 ${T} depend <id> --on <other>        # <id> can't start until <other> is done (auto blocked/unblocked)
+${T} check <id> "npm test"          # a command that proves it is done (or --clear); the user approves it in the office
 ${T} undepend <id> --on <other>      # drop that dependency
 ${T} context <id> "why / what I found" [--title "..."]          # explanation
 ${T} context <id> --kind log --title "failing test" --file out.txt   # a log (or --file - to pipe)
@@ -127,6 +128,13 @@ machine-readable output, \`--by "<short label>"\` to describe yourself (e.g. "cl
   subtask you are doing. When the last subtask is done the CLI will hint that the parent can be closed.
   To restructure existing items use \`move <id> --parent <id>\` — never delete and re-add them (that loses
   their id, claim and background, and breaks references to them).
+- **Checks prove done.** If \`show\` lists a check for your item, run it and only mark the item done once it passes.
+  When you add items whose success a command can show (tests pass, the build works), set one with \`check\` (keep it
+  fast and specific). The office runs it only after the user approves it.
+- **Hand off before done.** If other items wait on yours (\`show\` lists them under "needed by"), leave each a short
+  \`context\` note with what its session would otherwise have to rediscover: what changed, where things are, decisions
+  and why. If one shouldn't go ahead as written any more, \`block\` it with the reason. In a sequence run from the
+  board, the next session starts from your note.
 - **Titles are short and imperative; the summary is one line of context** (why it matters / where it stands) that
   the user sees under the title. Fix unclear titles, stale summaries or wrong priorities with \`edit\`.
 - **Leave background only when it helps the user understand** — the root cause you found, the key error log,
