@@ -15,12 +15,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { OFFICE_DIR, writeJsonAtomic, readJson } from './config.js';
+import { withFileLock } from './lock.js';
 
 export const RESULTS_DIR = path.join(OFFICE_DIR, 'results');
 fs.mkdirSync(RESULTS_DIR, { recursive: true });
 
 export const CHART_TYPES = ['line', 'bar', 'scatter', 'table', 'image', 'text'];
 const MAX_ROWS = 5000, MAX_TABLE_ROWS = 500, MAX_TEXT = 20000, MAX_IMAGE = 8 * 1024 * 1024, MAX_SOURCE_READ = 4 * 1024 * 1024;
+const MAX_JSON_READ = 64 * 1024 * 1024;
 export const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml' };
 
 // ---------------------------------------------------------------- ids and files
@@ -43,22 +45,9 @@ function runFile(slug, runId) {
 }
 const imageDir = (slug) => path.join(projectDir(slug), 'img');
 
-function sleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
-
 function withLock(file, fn) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const lock = `${file}.lock`;
-  for (let i = 0; i < 100; i++) {
-    try {
-      fs.closeSync(fs.openSync(lock, 'wx'));
-      try { return fn(); } finally { try { fs.unlinkSync(lock); } catch { /* gone */ } }
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      try { if (Date.now() - fs.statSync(lock).mtimeMs > 10000) fs.unlinkSync(lock); } catch { /* raced */ }
-      sleep(50);
-    }
-  }
-  throw new Error('results are locked, try again');
+  return withFileLock(`${file}.lock`, fn, 'results are locked, try again');
 }
 
 export function readRun(slug, runId) {
@@ -316,18 +305,29 @@ function readSource(c) {
   else {
     try {
       // a huge log: only its tail is read (the header row is kept for CSV)
+      // (one JSON document can't be parsed from its tail, so that is read whole, up to MAX_JSON_READ)
       let text;
+      const ext = path.extname(file).toLowerCase();
       if (st.size > MAX_SOURCE_READ) {
         const fd = fs.openSync(file, 'r');
-        const buf = Buffer.alloc(MAX_SOURCE_READ);
-        fs.readSync(fd, buf, 0, MAX_SOURCE_READ, st.size - MAX_SOURCE_READ);
-        const head = Buffer.alloc(4096);
-        fs.readSync(fd, head, 0, 4096, 0);
-        fs.closeSync(fd);
-        const tail = buf.toString('utf8');
-        text = `${head.toString('utf8').split(/\r?\n/)[0]}\n${tail.slice(tail.indexOf('\n') + 1)}`;
+        let firstLine, tail = null;
+        try {
+          const head = Buffer.alloc(4096);
+          fs.readSync(fd, head, 0, 4096, 0);
+          firstLine = head.toString('utf8').replace(/^﻿/, '').split(/\r?\n/)[0];
+          if (!isJsonDocument(firstLine, ext)) {
+            const buf = Buffer.alloc(MAX_SOURCE_READ);
+            fs.readSync(fd, buf, 0, MAX_SOURCE_READ, st.size - MAX_SOURCE_READ);
+            tail = buf.toString('utf8');
+          }
+        } finally { fs.closeSync(fd); }
+        if (tail !== null) text = `${firstLine}\n${tail.slice(tail.indexOf('\n') + 1)}`;
+        else if (st.size > MAX_JSON_READ) {
+          throw new Error(`${path.basename(file)} is one ${Math.round(st.size / 1048576)} MB JSON document, too big to read. ` +
+            'Write it as JSON lines instead (.jsonl, one object per line) and the chart will show the latest rows.');
+        } else text = fs.readFileSync(file, 'utf8');
       } else text = fs.readFileSync(file, 'utf8');
-      const parsed = parseTabular(text, path.extname(file).toLowerCase());
+      const parsed = parseTabular(text, ext);
       value = c.type === 'table' ? { table: toTable(parsed) } : { rows: toSeriesRows(parsed, c.source.x, c.source.y).slice(-MAX_ROWS) };
     } catch (e) { value = { rows: [], table: { columns: [], rows: [] }, error: e.message }; }
   }
@@ -336,6 +336,14 @@ function readSource(c) {
 }
 
 // ---------------------------------------------------------------- parsing
+/** Is a file one JSON document (an array, or { rows: [...] }) rather than JSON lines or CSV? Judged by its first line. */
+function isJsonDocument(firstLine, ext) {
+  const s = firstLine.trim();
+  if (s[0] === '[') return true;
+  if (s[0] !== '{' || ext !== '.json') return false;
+  try { JSON.parse(s); return false; } catch { return true; } // a whole object on line 1 means JSON lines
+}
+
 function num(v) {
   if (typeof v === 'number') return v;
   if (typeof v !== 'string' || !v.trim()) return NaN;
@@ -352,6 +360,7 @@ export function parseTabular(text, ext = '') {
       const j = JSON.parse(s);
       rows = Array.isArray(j) ? j : Array.isArray(j.rows) ? j.rows : null;
     } catch { /* maybe JSON lines */ }
+    if (!rows && s[0] === '[') throw new Error('not valid JSON (is the file still being written?)');
   }
   if (!rows && s[0] === '{') {
     rows = [];

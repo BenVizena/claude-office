@@ -11,6 +11,20 @@ import { blockedRects, wallKeepouts, roomOpenings, WALL_H, WINDOW } from '../pub
 
 const CONV_FILE = path.join(STAFF_DIR, 'conversations.json');
 
+// Staff get only the tools named in their list (--tools), and Bash only for the listed commands (--allowedTools).
+const READ_ONLY = ['Read', 'Grep', 'Glob', 'Bash(git log *)', 'Bash(git diff *)', 'Bash(git status *)', 'Bash(git show *)'];
+// `git branch <name>` creates a branch (even with -v), so only the listing forms are allowed.
+const BRANCH_LISTING = ['Bash(git branch)', 'Bash(git branch -a*)', 'Bash(git branch -r*)', 'Bash(git branch --list*)',
+  'Bash(git branch --show-current)', 'Bash(git worktree list*)'];
+// git log/diff/show write their output to a file with --output, so that flag is denied for every staff member.
+const ALWAYS_DENY = ['Bash(git * --output*)', 'Bash(git *--output*)'];
+
+/** A permission rule path covering a whole folder: //c/Users/me/proj/** on Windows, //home/me/proj/** elsewhere. */
+function folderRule(dir) {
+  const p = path.resolve(dir).replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`).replace(/\/+$/, '');
+  return `/${p}/**`;
+}
+
 export class Staff {
   constructor({ getSettings, decor, catalog, scanner, onChange }) {
     Object.assign(this, { getSettings, decor, catalog, scanner, onChange });
@@ -39,9 +53,17 @@ export class Staff {
   reset(key) { delete this.conversations[key]; this.persist(); this.onChange(); }
 
   // ---------------- decorator ----------------
-  async decorate(room, text) {
-    const key = `decor:${room.key}`;
-    if (this.jobs.has(key)) throw new Error('The designer is still working on your last request.');
+  /** Starts a job in the background. A busy colleague throws right away (409) so the user is told, instead of the request vanishing. */
+  startJob(key, busyText, work) {
+    if (this.jobs.has(key)) throw Object.assign(new Error(busyText), { code: 409 });
+    work(key).catch((e) => console.error(e)); // run() marks the key busy before work() first awaits
+  }
+
+  decorate(room, text) {
+    this.startJob(`decor:${room.key}`, 'The designer is still working on your last request.', (key) => this.runDecorator(key, room, text));
+  }
+
+  async runDecorator(key, room, text) {
     const ws = path.join(STAFF_DIR, 'decorator', room.key);
     fs.mkdirSync(ws, { recursive: true });
     fs.rmSync(path.join(ws, 'new-items'), { recursive: true, force: true });
@@ -64,6 +86,8 @@ export class Staff {
     const result = await this.run(key, {
       cwd: ws, text, model: settings.decorModel,
       addDirs: projectDir ? [projectDir] : [],
+      // it may read the project (for its art) but never change it
+      deny: projectDir ? [`Edit(${folderRule(projectDir)})`, `Write(${folderRule(projectDir)})`] : [],
       system: DECORATOR_PROMPT + (blender ? '' : NO_BLENDER) + (projectDir ? `
 
 This room's project lives at ${projectDir} (read-only for you). When the user mentions "the game's", "the project's" or "our" assets, art, characters or screenshots, look there: Glob for images (e.g. **/*.png, skipping .godot/, .import and build folders), Read a few promising ones to see them, then turn the good ones into decor with make-image-item.mjs.` : ''),
@@ -101,9 +125,11 @@ This room's project lives at ${projectDir} (read-only for you). When the user me
   }
 
   // ---------------- session knower ----------------
-  async ask(session, text) {
-    const key = `session:${session.id}`;
-    if (this.jobs.has(key)) throw new Error('Still thinking about your last question.');
+  ask(session, text) {
+    this.startJob(`session:${session.id}`, 'Still thinking about your last question.', (key) => this.runColleague(key, session, text));
+  }
+
+  async runColleague(key, session, text) {
     const ws = path.join(STAFF_DIR, 'knower', session.id);
     fs.mkdirSync(ws, { recursive: true });
     fs.writeFileSync(path.join(ws, 'transcript.md'), condenseTranscript(session.file));
@@ -115,7 +141,7 @@ This room's project lives at ${projectDir} (read-only for you). When the user me
     const result = await this.run(key, {
       cwd: ws, text, model: settings.chatModel, addDirs,
       system: KNOWER_PROMPT,
-      tools: ['Read', 'Grep', 'Glob', 'Bash(git log *)', 'Bash(git diff *)', 'Bash(git status *)', 'Bash(git show *)'],
+      tools: READ_ONLY,
       timeoutMs: 6 * 60000,
     });
     conv.messages.push({ from: 'staff', text: result.text, at: Date.now(), error: result.error });
@@ -125,9 +151,11 @@ This room's project lives at ${projectDir} (read-only for you). When the user me
 
   // ---------------- office administrator ----------------
   /** Chat with the administrator of a room (or the office manager in the lobby) about what every agent is doing. */
-  async askAdmin(room, allRooms, text) {
-    const key = `admin:${room.key}`;
-    if (this.jobs.has(key)) throw new Error('The administrator is still looking into your last question.');
+  askAdmin(room, allRooms, text) {
+    this.startJob(`admin:${room.key}`, 'The administrator is still looking into your last question.', (key) => this.runAdmin(key, room, allRooms, text));
+  }
+
+  async runAdmin(key, room, allRooms, text) {
     const ws = path.join(STAFF_DIR, 'admin', room.key);
     const tdir = path.join(ws, 'transcripts');
     fs.rmSync(tdir, { recursive: true, force: true });
@@ -153,7 +181,7 @@ This room's project lives at ${projectDir} (read-only for you). When the user me
     const result = await this.run(key, {
       cwd: ws, text, model: settings.chatModel, addDirs,
       system: lobby ? ADMIN_PROMPT.replace('this project', 'the whole office (every project)') : ADMIN_PROMPT,
-      tools: ['Read', 'Grep', 'Glob', 'Bash(git log *)', 'Bash(git diff *)', 'Bash(git status *)', 'Bash(git show *)', 'Bash(git branch *)', 'Bash(git worktree list*)'],
+      tools: [...READ_ONLY, ...BRANCH_LISTING],
       timeoutMs: 8 * 60000,
     });
     conv.messages.push({ from: 'staff', text: result.text, at: Date.now(), error: result.error });
@@ -162,11 +190,16 @@ This room's project lives at ${projectDir} (read-only for you). When the user me
   }
 
   // ---------------- runner ----------------
-  run(key, { cwd, text, model, system, tools, addDirs = [], env = {}, timeoutMs }) {
+  run(key, { cwd, text, model, system, tools, deny = [], addDirs = [], env = {}, timeoutMs }) {
     const settings = this.getSettings();
     const conv = this.conv(key);
-    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--model', model, '--permission-mode', 'acceptEdits',
-      '--append-system-prompt', system, '--allowedTools', ...tools];
+    // --allowedTools only pre-approves; --tools is what removes the rest (acceptEdits would otherwise approve
+    // Edit/Write in every --add-dir folder). Staff without Write/Edit don't get acceptEdits at all.
+    const writes = tools.includes('Write') || tools.includes('Edit');
+    const available = [...new Set(tools.map((t) => t.replace(/\(.*$/s, '')))];
+    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--model', model,
+      '--permission-mode', writes ? 'acceptEdits' : 'default', '--append-system-prompt', system,
+      '--tools', available.join(','), '--allowedTools', ...tools, '--disallowedTools', ...ALWAYS_DENY, ...deny];
     for (const d of addDirs) args.push('--add-dir', d);
     if (conv.claudeSessionId) args.push('--resume', conv.claudeSessionId);
     const job = { status: 'running', progress: 'thinking…', startedAt: Date.now() };

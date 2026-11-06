@@ -518,9 +518,16 @@ export class UI {
     if (!text) return;
     ta.value = '';
     const v = this.current;
-    if (v.kind === 'designer') await api('/api/decorate', { room: v.room, text });
-    else if (v.kind === 'admin') await api('/api/admin', { room: v.room, text });
-    else if (v.kind === 'session') await api('/api/ask', { session: v.session, text });
+    try {
+      if (v.kind === 'designer') await api('/api/decorate', { room: v.room, text });
+      else if (v.kind === 'admin') await api('/api/admin', { room: v.room, text });
+      else if (v.kind === 'session') await api('/api/ask', { session: v.session, text });
+    } catch (err) {
+      // e.g. "still working on your last request": give the message back so it isn't lost
+      const box = $('[data-keep="chat"]', this.body);
+      if (box && !box.value) box.value = text;
+      alert(err.message);
+    }
   }
 
   async addTodo() {

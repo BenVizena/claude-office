@@ -113,11 +113,17 @@ The office itself is free: it only reads files. These features start **backgroun
 
 | Feature | Model setting | Tools it gets |
 |---|---|---|
-| Designer (redecorate a room) | `decorModel` | Read/Write/Edit in its own workspace, the furniture scripts, and **access to the room's project folder** (`--add-dir`) so it can reuse its art. It's told to only read there, but because it has Write/Edit, Claude Code would allow edits in that folder too |
+| Designer (redecorate a room) | `decorModel` | Read/Write/Edit in its own workspace, the furniture scripts, and **read access to the room's project folder** (`--add-dir`) so it can reuse its art. Edits and writes in the project folder are denied (`--disallowedTools "Edit(<project>/**)" "Write(<project>/**)"`) |
 | Ask a colleague | `chatModel` | Read-only: Read, Grep, Glob, `git log/diff/status/show` |
-| Office administrator / manager | `chatModel` | Read-only, as above, plus `git branch` and `git worktree list` |
+| Office administrator / manager | `chatModel` | Read-only, as above, plus the listing forms of `git branch` (`-a`, `-r`, `--list`, `--show-current`) and `git worktree list` |
 
-They run with `--permission-mode acceptEdits` and an explicit `--allowedTools` list, so they can only run the commands listed.
+Each one gets only the tools it needs (`--tools`), and Bash only for the listed commands (`--allowedTools`).
+`git --output=<file>` is denied for all of them, since `git log/diff/show` would otherwise write files with it.
+The colleague and the administrator run in the default permission mode, so anything not listed is refused. The
+designer runs with `--permission-mode acceptEdits` so it can edit its own workspace.
+
+One caveat: when Blender is installed, the designer models furniture by writing a Blender Python script and running
+it through `make-item.mjs`. That script is ordinary Python, so the permission rules above don't limit what it can do.
 
 ## Controls
 

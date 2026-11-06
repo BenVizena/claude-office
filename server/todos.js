@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { TODO_DIR, writeJsonAtomic, readJson } from './config.js';
+import { withFileLock } from './lock.js';
 
 export const GLOBAL_BOARD = 'office';
 const CLAIM_STALE_MS = 6 * 3600000; // an untouched claim older than this can be taken over
@@ -18,22 +19,8 @@ function fileFor(slug) {
   return path.join(TODO_DIR, `${slug}.json`);
 }
 
-function sleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
-
 function withLock(slug, fn) {
-  const lock = fileFor(slug) + '.lock';
-  for (let i = 0; i < 100; i++) {
-    try {
-      const fd = fs.openSync(lock, 'wx');
-      fs.closeSync(fd);
-      try { return fn(); } finally { try { fs.unlinkSync(lock); } catch { /* gone */ } }
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      try { if (Date.now() - fs.statSync(lock).mtimeMs > 10000) fs.unlinkSync(lock); } catch { /* raced */ }
-      sleep(50);
-    }
-  }
-  throw new Error('todo board is locked, try again');
+  return withFileLock(fileFor(slug) + '.lock', fn, 'todo board is locked, try again');
 }
 
 export function readBoard(slug) {

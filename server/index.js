@@ -10,8 +10,10 @@ import { Catalog, DecorStore } from './decor.js';
 import { Staff } from './staff.js';
 import { addItem, updateItem, removeItem, claimItem, releaseItem, addDetail, readDetails, listBoards, moveItem, addDependency, removeDependency } from './todos.js';
 import { computeUsage } from './usage.js';
+import { useNonBlockingLocks, whenUnlocked } from './lock.js';
 import { listRuns, runSummary, loadRun, imagePath, removeRun, IMAGE_TYPES } from './results.js';
 
+useNonBlockingLocks(); // the CLI may hold a board's lock: wait for it without freezing the server
 let settings = loadSettings();
 if (syncHookCopy()) console.log('Updated the installed Claude Code hook to this version.');
 const getSettings = () => settings;
@@ -62,7 +64,7 @@ function serveStatic(req, res, urlPath) {
     if (!urlPath.startsWith(prefix)) continue;
     let rel = decodeURIComponent(urlPath.slice(prefix.length)) || 'index.html';
     const file = path.resolve(dir, rel);
-    if (!file.startsWith(path.resolve(dir))) break;
+    if (!file.startsWith(path.resolve(dir) + path.sep)) break; // the separator keeps a sibling like public-x out
     if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) break;
     res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
     fs.createReadStream(file).pipe(res);
@@ -122,23 +124,25 @@ const routes = {
     return listRuns(board).map(runSummary).sort((x, y) => y.updatedAt - x.updatedAt);
   },
 
-  'POST /api/results/remove': async (b) => { const r = removeRun(String(b.board), String(b.run)); markDirty(); return { ok: true, id: r.id }; },
+  'POST /api/results/remove': async (b) => { const r = await whenUnlocked(() => removeRun(String(b.board), String(b.run))); markDirty(); return { ok: true, id: r.id }; },
 
   'POST /api/todos': async (b) => {
     const room = findRoom(b.board === 'office' ? 'lobby' : b.board);
     const slug = b.board;
     const meta = room && room.kind === 'project' ? { name: room.name, root: room.root } : { name: 'Whole office' };
-    let r;
-    if (b.action === 'add') r = addItem(slug, meta, { text: b.text, by: 'you', priority: b.priority || 'normal', parent: b.parent });
-    else if (b.action === 'update') r = updateItem(slug, b.id, { ...b.patch, by: 'you' });
-    else if (b.action === 'remove') r = removeItem(slug, b.id);
-    else if (b.action === 'claim') r = claimItem(slug, b.id, { by: 'you', force: true });
-    else if (b.action === 'release') r = releaseItem(slug, b.id, { by: 'you' });
-    else if (b.action === 'detail') r = addDetail(slug, b.id, { by: 'you', kind: 'note', text: b.text });
-    else if (b.action === 'move') r = moveItem(slug, b.id, b.parent || null, { by: 'you', before: b.before, after: b.after });
-    else if (b.action === 'depend') r = addDependency(slug, b.id, b.on, { by: 'you' });
-    else if (b.action === 'undepend') r = removeDependency(slug, b.id, b.on, { by: 'you' });
-    else throw new Error('unknown action');
+    // each action is a single locked write, so it is safe to retry while the CLI holds the board's lock
+    const r = await whenUnlocked(() => {
+      if (b.action === 'add') return addItem(slug, meta, { text: b.text, by: 'you', priority: b.priority || 'normal', parent: b.parent });
+      if (b.action === 'update') return updateItem(slug, b.id, { ...b.patch, by: 'you' });
+      if (b.action === 'remove') return removeItem(slug, b.id);
+      if (b.action === 'claim') return claimItem(slug, b.id, { by: 'you', force: true });
+      if (b.action === 'release') return releaseItem(slug, b.id, { by: 'you' });
+      if (b.action === 'detail') return addDetail(slug, b.id, { by: 'you', kind: 'note', text: b.text });
+      if (b.action === 'move') return moveItem(slug, b.id, b.parent || null, { by: 'you', before: b.before, after: b.after });
+      if (b.action === 'depend') return addDependency(slug, b.id, b.on, { by: 'you' });
+      if (b.action === 'undepend') return removeDependency(slug, b.id, b.on, { by: 'you' });
+      throw new Error('unknown action');
+    });
     markDirty();
     return r;
   },
@@ -146,21 +150,21 @@ const routes = {
   'POST /api/decorate': async (b) => {
     const room = findRoom(b.room);
     if (!room) throw new Error('unknown room');
-    staff.decorate(room, String(b.text || '').slice(0, 4000)).catch((e) => console.error(e));
+    staff.decorate(room, String(b.text || '').slice(0, 4000)); // throws if the designer is busy
     return { ok: true };
   },
 
   'POST /api/ask': async (b) => {
     const s = scanner.get(b.session);
     if (!s) throw new Error('unknown session');
-    staff.ask(s, String(b.text || '').slice(0, 4000)).catch((e) => console.error(e));
+    staff.ask(s, String(b.text || '').slice(0, 4000));
     return { ok: true };
   },
 
   'POST /api/admin': async (b) => {
     const room = findRoom(b.room);
     if (!room) throw new Error('unknown room');
-    staff.askAdmin(room, state.rooms, String(b.text || '').slice(0, 4000)).catch((e) => console.error(e));
+    staff.askAdmin(room, state.rooms, String(b.text || '').slice(0, 4000));
     return { ok: true };
   },
 
@@ -233,7 +237,7 @@ const server = http.createServer(async (req, res) => {
       const body = req.method === 'POST' ? await readBody(req) : null;
       json(res, 200, await handler(body, req));
     } catch (e) {
-      json(res, e.code === 403 ? 403 : 400, { error: e.message });
+      json(res, e.code === 403 || e.code === 409 ? e.code : 400, { error: e.message });
     }
     return;
   }
