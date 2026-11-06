@@ -69,7 +69,7 @@ function installSkill() {
   const T = `node "${TODO_CLI}"`;
   fs.writeFileSync(path.join(SKILL_DIR, 'SKILL.md'), `---
 name: office-todo
-description: Read and update the shared Claude Office to-do boards (one per project plus an office-wide board) — claim items you work on, break them into subtasks, attach background, mark them done — set your status speech bubble in the office (update it when your phase of work changes; ask the user a question with --needs-you), and post results for the user to view (charts of test, benchmark, training or eval metrics — partial results too — tables, images, notes). Use when the user mentions the todo board / office todos, when you start or finish a task that is on the board, when you discover follow-up work worth tracking, when you run tests, benchmarks, training or experiments whose results the user will want to see, or when asked what's left to do.
+description: Read and update the shared Claude Office to-do boards (one per project plus an office-wide board) — claim items you work on, break them into subtasks, attach background, mark them done — set your status speech bubble in the office (update it when your phase of work changes; ask the user a question with --needs-you), and post results for the user to view (charts of test, benchmark, training or eval metrics — partial results too — tables, images, notes). Use when the user mentions the todo board / office todos, when the user gives you several tasks at once (a list of fixes, review findings, a multi-step plan) — put each on the board before you start — when you start or finish a task that is on the board, as soon as you notice follow-up work worth tracking (a bug, a gap, something left for later), when you run tests, benchmarks, training or experiments whose results the user will want to see, or when asked what's left to do.
 ---
 
 # Office to-do boards
@@ -101,6 +101,9 @@ Flags: \`--global\` for the office-wide board, \`--project <path>\` for another 
 machine-readable output, \`--by "<short label>"\` to describe yourself (e.g. "claude: auth refactor").
 
 ## How to work with the board
+- **Several tasks at once? Put them on the board first.** When the user hands you a list (review findings to fix,
+  a multi-part request, a plan you agreed on), add one item per task before you start, then claim each as you
+  get to it. That's how the user follows your progress from the office.
 - **Claim before you start.** If \`claim\` says someone else holds it, pick something else or ask the user —
   don't use \`--force\` unless the user tells you to take it over.
 - **Break big items down.** Add subtasks with \`--parent <id>\` when an item has several real steps; claim the
@@ -112,8 +115,11 @@ machine-readable output, \`--by "<short label>"\` to describe yourself (e.g. "cl
 - **Leave background only when it helps the user understand** — the root cause you found, the key error log,
   the important snippet, a decision and its reason. Keep it short; don't dump whole files or routine output.
 - **Done means done**: verified, not just written. Then \`done <id>\` (your claim is recorded as the completer).
-- Add genuine follow-ups you discover (bugs, TODOs you left, things the user asked to do later). Don't add your
-  own micro-steps, and never delete items the user created — mark them done or blocked instead.
+- **Add follow-ups as soon as you notice them**, not at the end: a bug you spotted on the way, a gap or risk
+  you found, a TODO you left, something the user asked to do later. Add one when it will outlast your current task
+  or the user would want to see it or pick it up, and give it a summary that says why it matters. Skip your own
+  micro-steps and anything you'll finish within this task.
+- Never delete items the user created; mark them done or blocked instead.
 - If you stop working on something you claimed, \`release\` it so others can pick it up.
 
 ## Your status (speech bubble)
