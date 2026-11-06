@@ -170,6 +170,18 @@ catalog and flat art, and tells you when a request would need Blender.
 Usage numbers come from transcripts (main sessions + subagents). The plan-limit percentages shown by `/usage`
 are not stored locally, so they aren't on the board.
 
+## Tests
+
+```bash
+npm test
+```
+
+Runs the suite in `test/` with Node's built-in test runner (no extra dependencies; needs Node 21+ for the file glob).
+It covers the to-do boards, board news, results, transcript scanning and status, pricing, the office layout math,
+the `office-todo` CLI end to end, and the hook. Each test file points the home directory at a temporary folder
+(`test/helpers/home.js`) and deletes it afterwards, so tests never touch your real `~/.claude` data, and they don't
+need the office to be running.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

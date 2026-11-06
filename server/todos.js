@@ -80,8 +80,9 @@ export function openBlockers(board, it) {
 function syncBlocked(board) {
   const freed = [];
   for (const it of board.items) {
-    if (!it.blockedBy?.length) continue;
-    it.blockedBy = it.blockedBy.filter((id) => board.items.some((x) => x.id === id));
+    // (an auto-blocked item whose last dependency was just dropped still needs unblocking)
+    if (!it.blockedBy?.length && !it.autoBlocked) continue;
+    it.blockedBy = (it.blockedBy || []).filter((id) => board.items.some((x) => x.id === id));
     if (!it.blockedBy.length) delete it.blockedBy;
     const waiting = openBlockers(board, it).length > 0;
     if (waiting && it.status === 'todo') { it.status = 'blocked'; it.updatedAt = Date.now(); }
