@@ -15,7 +15,8 @@ export const GLOBAL_BOARD = 'office';
 const CLAIM_STALE_MS = 6 * 3600000; // an untouched claim older than this can be taken over
 // A ▶ launch claims the item for a session that hasn't started yet. Until its SessionStart arrives the claim is
 // pending; if it never comes (wrong path, crash, window closed), anyone may take the item over after this long.
-export const PENDING_STALE_MS = 2 * 60000;
+// Generous because the trust-folder prompt in a new window can hold up SessionStart for minutes.
+export const PENDING_STALE_MS = 10 * 60000;
 
 /** Can someone else take this claim without --force? (its session ended or never started, or nobody touched it for hours) */
 export function claimIsStale(c, now = Date.now()) {

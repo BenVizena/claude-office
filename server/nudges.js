@@ -6,7 +6,7 @@ import path from 'node:path';
 import { REPO_DIR, projectSlug } from './config.js';
 import { resolveRoot } from './git.js';
 import { readBoard, listBoards, claimIsStale, GLOBAL_BOARD } from './todos.js';
-import { touch, scan, forget, label } from './news.js';
+import { touch, scan, label, takeWatcherReminder } from './news.js';
 import { whenUnlocked } from './lock.js';
 
 const CLI = `node "${path.join(REPO_DIR, 'bin', 'office-todo.js').replace(/\\/g, '/')}"`;
@@ -55,7 +55,12 @@ export async function boardNews(sessionId, event, cwd) {
     const head = event === 'SessionStart' ? summary(boards, sessionId) : [];
     // news past MAX_LINES stays in the outbox for next time (only what is shown gets acknowledged)
     const shown = rec.outbox.slice(0, Math.max(0, MAX_LINES - head.length));
-    const lines = [...head, ...shown.map((e) => e.text)];
+    // events `office-todo wait` already printed are repeated once, marked, in case that notification never landed
+    const lines = [...head, ...shown.map((e) => (e.shownAt ? `(repeat — the watcher may have told you already) ${e.text}` : e.text))];
+    // backstop for a session that ran `wait` and didn't start it again (an idle one gets no hook, so this can't reach it)
+    if (await whenUnlocked(() => takeWatcherReminder(sessionId))) {
+      lines.push(`your board watcher isn't running any more: if you still want news as it happens, start \`${CLI} wait\` again in the background`);
+    }
     if (!lines.length) return null;
     const left = rec.outbox.length - shown.length;
     const more = left > 0 ? `\n- …and ${left} more board change${left === 1 ? '' : 's'} (shown next turn)` : '';
@@ -67,5 +72,3 @@ export async function boardNews(sessionId, event, cwd) {
     return null;
   }
 }
-
-export function forgetSession(sessionId) { forget(sessionId); }

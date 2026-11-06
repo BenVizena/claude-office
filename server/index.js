@@ -9,8 +9,8 @@ import { buildOffice } from './office.js';
 import { Catalog, DecorStore } from './decor.js';
 import { Staff } from './staff.js';
 import { addItem, updateItem, removeItem, claimItem, releaseItem, addDetail, readDetails, listBoards, moveItem, addDependency, removeDependency, markSessionClaims } from './todos.js';
-import { boardNews, forgetSession } from './nudges.js';
-import { ack as ackNews, scanAll } from './news.js';
+import { boardNews } from './nudges.js';
+import { ack as ackNews, markEnded as markNewsEnded, scanAll } from './news.js';
 import { startOnItem } from './launch.js';
 import { computeUsage } from './usage.js';
 import { useNonBlockingLocks, whenUnlocked } from './lock.js';
@@ -124,7 +124,8 @@ const routes = {
     const ev = b.hook_event_name;
     // board news first: the hook gives up after 800 ms, and the claim update below may wait on a board's lock
     const news = ev === 'SessionEnd' ? null : await boardNews(b.session_id, ev, b.cwd);
-    if (ev === 'SessionEnd') forgetSession(b.session_id);
+    // its news file stays for a resume; just note that it ended
+    if (ev === 'SessionEnd') whenUnlocked(() => markNewsEnded(b.session_id)).catch((e) => console.error('news end failed:', e.message));
     // claims follow the session's life: ended -> anyone may take them over; back (resume) or started (a ▶ launch) ->
     // they're its own again. Not awaited, so a busy lock never holds up the hook.
     if (ev === 'SessionEnd' || ev === 'SessionStart' || ev === 'UserPromptSubmit') {

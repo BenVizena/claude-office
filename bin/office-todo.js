@@ -34,7 +34,7 @@ import { setStatus, clearStatus, readStatus } from '../server/status.js';
 import {
   readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, moveItem, addDependency, removeDependency, openBlockers, claimIsStale,
 } from '../server/todos.js';
-import { subscribe, unsubscribe, scan, ack, subCount } from '../server/news.js';
+import { subscribe, unsubscribe, scan, markShown, subCount, watcherBeat, WATCHER_BEAT_MS } from '../server/news.js';
 import {
   logPoint, addData, watchFile, addImage, addNote, removeChart, removeRun, listRuns, runSummary, readRun, defaultRunId, slugify,
 } from '../server/results.js';
@@ -133,15 +133,20 @@ const WAIT_POLL_MS = 3000, WAIT_SETTLE_MS = 3000, WAIT_MAX_MS = 24 * 3600000;
 async function waitForNews() {
   if (!session) throw new Error('wait needs a Claude Code session (run it from inside Claude Code, in the background)');
   const started = Date.now();
+  let lastBeat = 0;
   const check = () => { try { return scan(session); } catch { return null; } }; // lock busy: try again next round
   for (;;) {
     let rec = check();
-    if (rec && rec.outbox.some((e) => e.wake)) {
+    // only news this watcher (or an earlier one) hasn't printed yet counts: shown news waits for the hook
+    if (rec && rec.outbox.some((e) => e.wake && !e.shownAt)) {
       await sleep(WAIT_SETTLE_MS);
       rec = check() || rec;
-      const events = rec.outbox;
+      const events = rec.outbox.filter((e) => !e.shownAt);
       console.log(`[Claude Office to-do board]\n${events.map((e) => `- ${e.text}`).join('\n')}`);
-      ack(session, events[events.length - 1].id);
+      // not acked: the hook repeats it on the next prompt in case this notification never reached the model
+      for (let i = 0; ; i++) {
+        try { markShown(session, events[events.length - 1].id); break; } catch (e) { if (i >= 5) break; await sleep(500); }
+      }
       const n = subCount(rec);
       console.log(n
         ? `\nYou still follow ${n} item${n === 1 ? '' : 's'}: start \`office-todo wait\` again in the background to keep listening.`
@@ -153,6 +158,8 @@ async function waitForNews() {
       return;
     }
     if (Date.now() - started > WAIT_MAX_MS) { console.log('Stopped waiting after 24 hours with no news.'); return; }
+    // "still watching", so the hook can remind the session if this stops and isn't started again
+    if (Date.now() - lastBeat >= WATCHER_BEAT_MS) { try { watcherBeat(session); lastBeat = Date.now(); } catch { /* busy: next round */ } }
     await sleep(WAIT_POLL_MS);
   }
 }

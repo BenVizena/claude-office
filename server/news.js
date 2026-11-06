@@ -7,14 +7,21 @@
 // someone else, or the session's claim was taken over. Those "wake" events are what the badges in the office and
 // `office-todo wait` react to. Smaller news (the user added an item, an item was removed) waits for the next hook.
 //
-// News leaves the outbox only when it is acknowledged: by the hook once it has printed it into the session's context,
-// or by `office-todo wait` once it has printed it. A lost acknowledgement means news is repeated, never dropped.
+// News leaves the outbox only when the hook acknowledges it, once it has printed it into the session's context. A lost
+// acknowledgement means news is repeated, never dropped. `office-todo wait` doesn't acknowledge what it prints (a
+// background notification may never start a turn); it marks it shownAt, so it no longer wakes or badges, and the
+// hook repeats it once, marked as a repeat.
 // Subscriptions end on their own: when the item is done or removed, when a claim-only subscription's claim is gone,
 // or after MAX_WAKES wake events, so an idle session is woken a bounded number of times and then left alone.
 //
-// File: { session, createdAt, touchedAt, scannedAt, boards: [slug], muted: [key], announced: [key],
+// A session's file outlives SessionEnd (endedAt is set, and cleared when it's resumed) until FORGET_MS of silence.
+//
+// A running `office-todo wait` beats every minute (watcherAt); when the beat goes stale while the session still
+// follows items, the next hook reminds it once (remindedAt) to start the watcher again.
+//
+// File: { session, createdAt, touchedAt, scannedAt, endedAt?, watcherAt?, remindedAt?, boards: [slug], muted: [key], announced: [key],
 //         subs: { "<board>:<id>": { board, id, reasons: [claim|created|watch], since, wakes, last: { status, waiting, claimSession } } },
-//         outbox: [{ id, at, kind, wake, board, item, text }], nextId }
+//         outbox: [{ id, at, kind, wake, board, item, text, shownAt? }], nextId }   (shownAt: printed by `wait`)
 import fs from 'node:fs';
 import path from 'node:path';
 import { OFFICE_DIR, writeJsonAtomic, readJson } from './config.js';
@@ -87,6 +94,30 @@ export function subscribe(session, board, itemId, reason) {
   return update(session, (rec) => { rec.touchedAt = Date.now(); addSub(rec, board, it, reason); });
 }
 
+/**
+ * `office-todo wait` is running for this session (sent when it starts and every WATCHER_BEAT_MS), so the hook can
+ * remind it when the watcher stopped and wasn't started again.
+ */
+export function watcherBeat(session) {
+  return update(session, (rec) => { rec.watcherAt = Date.now(); });
+}
+export const WATCHER_BEAT_MS = 60000;
+const WATCHER_GONE_MS = 2.5 * 60000;
+
+/**
+ * Should the hook remind this session to start its watcher again? Once per stop: true when its watcher ran before,
+ * it still follows items, the last beat is stale and it hasn't been reminded since. Marks it reminded. (A session
+ * that never ran one isn't nagged: ▶ sessions are told to in their prompt, and the first prompt comes before it could.)
+ */
+export function takeWatcherReminder(session) {
+  const rec = readNews(session);
+  const now = Date.now();
+  if (!rec?.watcherAt || !Object.keys(rec.subs).length || now - rec.watcherAt < WATCHER_GONE_MS) return false;
+  if ((rec.remindedAt || 0) > rec.watcherAt) return false;
+  update(session, (r) => { r.remindedAt = now; });
+  return true;
+}
+
 /** Stop following an item (and don't pick it up again automatically). */
 export function unsubscribe(session, boardId, itemId) {
   const k = keyOf(boardId, itemId);
@@ -103,8 +134,18 @@ export function unsubscribe(session, boardId, itemId) {
 export function touch(session, boardIds) {
   return update(session, (rec) => {
     rec.touchedAt = Date.now();
+    delete rec.endedAt; // back (resumed)
     for (const b of boardIds) if (!rec.boards.includes(b)) rec.boards.push(b);
   });
+}
+
+/**
+ * The session ended. Its file stays: a resumed session (claude --resume) keeps its watches and gets the news that
+ * queued meanwhile. scanAll() drops files nobody touched for FORGET_MS.
+ */
+export function markEnded(session) {
+  if (!readNews(session)) return null; // never followed anything: don't create a file for it
+  return update(session, (rec) => { rec.endedAt = Date.now(); });
 }
 
 /** Drop events up to and including id `upTo`: they reached the session. */
@@ -118,7 +159,21 @@ export function ack(session, upTo) {
   });
 }
 
-export function forget(session) {
+/**
+ * `office-todo wait` printed events up to id `upTo`. Printing isn't proof the session read them (the notification
+ * can fail to start a turn), so they stay in the outbox for the hook, but no longer count as new: no badge, no wake.
+ */
+export function markShown(session, upTo) {
+  const n = Number(upTo);
+  if (!Number.isFinite(n)) return null;
+  return update(session, (rec) => {
+    let changed = false;
+    for (const e of rec.outbox) if (e.id <= n && !e.shownAt) { e.shownAt = Date.now(); changed = true; }
+    return changed;
+  });
+}
+
+function forget(session) {
   try { fs.unlinkSync(fileFor(session)); } catch { /* none */ }
 }
 
@@ -127,74 +182,86 @@ export function forget(session) {
  * boards: listBoards() if the caller already has it.
  */
 export function scan(session, boards = listBoards()) {
-  const byId = new Map(boards.map((b) => [b.id, b]));
   const readAt = Date.now();
-  return update(session, (rec) => {
-    let changed = false;
-    const where = (bdId) => (bdId === GLOBAL_BOARD && rec.boards.length > 1 ? ' (office-wide board)' : '');
+  // Most scans find nothing (scanAll runs on every rebuild, each `wait` every few seconds), so first diff a copy
+  // without the lock; only when something changed, lock, re-read and diff the fresh record for real.
+  const cur = readNews(session) || blank(session);
+  if (!diff(structuredClone(cur), session, boards, readAt)) return cur;
+  return update(session, (rec) => diff(rec, session, boards, readAt));
+}
 
-    // 1. pick up claims and items this session made without subscribing (older CLI, the office's own ▶ launch, …)
-    for (const bd of boards) for (const it of bd.items) {
-      if (it.status === 'done') continue;
+/** Apply what happened on the boards to a session record (mutating it). Returns whether anything changed. */
+function diff(rec, session, boards, readAt) {
+  const byId = new Map(boards.map((b) => [b.id, b]));
+  let changed = false;
+  const where = (bdId) => (bdId === GLOBAL_BOARD && rec.boards.length > 1 ? ' (office-wide board)' : '');
+
+  // 1. pick up claims and items this session made without subscribing (older CLI, the office's own ▶ launch, …)
+  for (const bd of boards) for (const it of bd.items) {
+    if (it.status === 'done') continue;
+    const k = keyOf(bd.id, it.id);
+    if (rec.subs[k] || rec.muted.includes(k)) continue;
+    if (it.claim?.session === session) changed = addSub(rec, bd, it, 'claim') || changed;
+    else if (it.bySession === session) changed = addSub(rec, bd, it, 'created') || changed;
+  }
+
+  // 2. what happened to each subscribed item
+  for (const [k, sub] of Object.entries(rec.subs)) {
+    const bd = byId.get(sub.board);
+    if (!bd) continue; // board file unreadable for now: try again next time
+    const it = bd.items.find((x) => x.id === sub.id);
+    const w = where(sub.board);
+    if (!it) {
+      push(rec, { kind: 'removed', board: sub.board, item: sub.id, text: `item ${sub.id} you were following was removed from the board${w}` });
+      delete rec.subs[k]; changed = true; continue;
+    }
+    const was = sub.last, now = stateOf(bd, it);
+    const ev = (kind, text) => { push(rec, { kind, board: bd.id, item: it.id, title: it.text, ...(kind === 'done' ? { who: it.completedBy } : kind === 'takeover' ? { who: it.claim.by } : {}), text: text + w }); if (WAKE_KINDS.has(kind)) sub.wakes++; changed = true; };
+    if (now.status === 'done' && was.status !== 'done') {
+      if (it.completedSession !== session) ev('done', `${label(it)} was marked done by ${it.completedBy || 'someone else'}`);
+      delete rec.subs[k]; changed = true; continue;
+    }
+    // unblocked: judged from the blockers' completion times rather than from snapshots, so it can't be missed when the
+    // item started and stopped waiting between two scans (a dependency added and finished quickly)
+    const freedAt = Math.max(0, ...(it.blockedBy || []).map((b) => bd.items.find((x) => x.id === b)?.completedAt || 0));
+    const heardUpTo = Math.max(sub.since, sub.unblockedAt || 0);
+    if (!now.waiting && now.status !== 'done' && (was.waiting || freedAt > heardUpTo)) {
+      // it stops waiting either because its last open blocker finished, or because a dependency was dropped
+      // (undepend, or the blocker item deleted) while the blockers that remain had finished earlier
+      ev('unblocked', freedAt > heardUpTo
+        ? `${label(it)} is unblocked: everything it waited on is done`
+        : `${label(it)} no longer waits on anything (a dependency was removed)`);
+      sub.unblockedAt = Math.max(freedAt, Date.now());
+    }
+    if (was.claimSession === session && now.claimSession && now.claimSession !== session) ev('takeover', `${it.claim.by} took over your claim on ${label(it)}`);
+    const lostClaim = was.claimSession === session && now.claimSession !== session;
+    if (JSON.stringify(was) !== JSON.stringify(now)) { sub.last = now; changed = true; }
+    // a claim-only subscription ends with the claim; one that keeps waking the session ends after MAX_WAKES
+    if (lostClaim) sub.reasons = sub.reasons.filter((r) => r !== 'claim');
+    if (!sub.reasons.length || sub.wakes >= MAX_WAKES) {
+      delete rec.subs[k];
+      if (sub.wakes >= MAX_WAKES && !rec.muted.includes(k)) rec.muted.push(k);
+      changed = true;
+    }
+  }
+
+  // 3. items the user added on the boards this session works on (no wake: it hears on its next prompt)
+  const since = rec.scannedAt - 2000;
+  for (const bdId of rec.boards) {
+    const bd = byId.get(bdId);
+    if (!bd) continue;
+    for (const it of bd.items) {
       const k = keyOf(bd.id, it.id);
-      if (rec.subs[k] || rec.muted.includes(k)) continue;
-      if (it.claim?.session === session) changed = addSub(rec, bd, it, 'claim') || changed;
-      else if (it.bySession === session) changed = addSub(rec, bd, it, 'created') || changed;
+      if (it.by !== 'you' || it.createdAt <= since || it.createdAt <= rec.createdAt || rec.announced.includes(k)) continue;
+      push(rec, { kind: 'added', board: bd.id, item: it.id, text: `the user added ${label(it)}${where(bd.id)}` });
+      rec.announced = [...rec.announced, k].slice(-40);
+      changed = true;
     }
+  }
 
-    // 2. what happened to each subscribed item
-    for (const [k, sub] of Object.entries(rec.subs)) {
-      const bd = byId.get(sub.board);
-      if (!bd) continue; // board file unreadable for now: try again next time
-      const it = bd.items.find((x) => x.id === sub.id);
-      const w = where(sub.board);
-      if (!it) {
-        push(rec, { kind: 'removed', board: sub.board, item: sub.id, text: `item ${sub.id} you were following was removed from the board${w}` });
-        delete rec.subs[k]; changed = true; continue;
-      }
-      const was = sub.last, now = stateOf(bd, it);
-      const ev = (kind, text) => { push(rec, { kind, board: bd.id, item: it.id, title: it.text, ...(kind === 'done' ? { who: it.completedBy } : kind === 'takeover' ? { who: it.claim.by } : {}), text: text + w }); if (WAKE_KINDS.has(kind)) sub.wakes++; changed = true; };
-      if (now.status === 'done' && was.status !== 'done') {
-        if (it.completedSession !== session) ev('done', `${label(it)} was marked done by ${it.completedBy || 'someone else'}`);
-        delete rec.subs[k]; changed = true; continue;
-      }
-      // unblocked: judged from the blockers' completion times rather than from snapshots, so it can't be missed when the
-      // item started and stopped waiting between two scans (a dependency added and finished quickly)
-      const freedAt = Math.max(0, ...(it.blockedBy || []).map((b) => bd.items.find((x) => x.id === b)?.completedAt || 0));
-      const heardUpTo = Math.max(sub.since, sub.unblockedAt || 0);
-      if (!now.waiting && now.status !== 'done' && (was.waiting || freedAt > heardUpTo)) {
-        ev('unblocked', `${label(it)} is unblocked: everything it waited on is done`);
-        sub.unblockedAt = Math.max(freedAt, Date.now());
-      }
-      if (was.claimSession === session && now.claimSession && now.claimSession !== session) ev('takeover', `${it.claim.by} took over your claim on ${label(it)}`);
-      const lostClaim = was.claimSession === session && now.claimSession !== session;
-      if (JSON.stringify(was) !== JSON.stringify(now)) { sub.last = now; changed = true; }
-      // a claim-only subscription ends with the claim; one that keeps waking the session ends after MAX_WAKES
-      if (lostClaim) sub.reasons = sub.reasons.filter((r) => r !== 'claim');
-      if (!sub.reasons.length || sub.wakes >= MAX_WAKES) {
-        delete rec.subs[k];
-        if (sub.wakes >= MAX_WAKES && !rec.muted.includes(k)) rec.muted.push(k);
-        changed = true;
-      }
-    }
-
-    // 3. items the user added on the boards this session works on (no wake: it hears on its next prompt)
-    const since = rec.scannedAt - 2000;
-    for (const bdId of rec.boards) {
-      const bd = byId.get(bdId);
-      if (!bd) continue;
-      for (const it of bd.items) {
-        const k = keyOf(bd.id, it.id);
-        if (it.by !== 'you' || it.createdAt <= since || it.createdAt <= rec.createdAt || rec.announced.includes(k)) continue;
-        push(rec, { kind: 'added', board: bd.id, item: it.id, text: `the user added ${label(it)}${where(bd.id)}` });
-        rec.announced = [...rec.announced, k].slice(-40);
-        changed = true;
-      }
-    }
-
-    if (!changed) return false;
-    rec.scannedAt = readAt;
-  });
+  if (!changed) return false;
+  rec.scannedAt = readAt;
+  return true;
 }
 
 /** Sessions with a news file. */
@@ -214,7 +281,7 @@ export function scanAll(boards = listBoards()) {
     try { rec = scan(s, boards); } catch { rec = readNews(s); } // locked by the CLI: show what we had
     if (!rec) continue;
     if (now - (rec.touchedAt || 0) > FORGET_MS) { forget(s); continue; }
-    const wake = rec.outbox.filter((e) => e.wake);
+    const wake = rec.outbox.filter((e) => e.wake && !e.shownAt); // shown by `wait`: the session has heard it
     if (wake.length) pending.set(s, wake.map(({ id, at, kind, board, item, title, who }) => ({ id, at, kind, board, item, title, who })));
   }
   return pending;

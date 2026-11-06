@@ -119,7 +119,8 @@ machine-readable output, \`--by "<short label>"\` to describe yourself (e.g. "cl
   finishes something — or you were started from the board (▶) to work on an item — start \`${T} wait\` as a
   background command (run_in_background). It uses no tokens while it waits and finishes when an item you follow is
   unblocked, finished by someone else, or your claim is taken over, printing what happened; start it again if it
-  says you still follow items. Without it, news reaches you on the user's next message. If an idle session is woken
+  says you still follow items. Without it, news reaches you on the user's next message (news the watcher printed
+  comes again there once, marked as a repeat: ignore it if you already acted on it). If an idle session is woken
   by news, don't start new work on your own: set a status such as "X is unblocked, ready when you are" and wait
   for the user (unless you were started from the board to do exactly that item).
 - **Break big items down.** Add subtasks with \`--parent <id>\` when an item has several real steps; claim the
