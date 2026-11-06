@@ -73,13 +73,24 @@ export function renderPlot(el, chart, { height = 240 } = {}) {
   const endLabels = type === 'line' && series.length <= 4;
   const left = Math.ceil(Math.max(...yt.map((v) => textW(fmt(v))))) + 12 + (chart.yLabel ? 16 : 0);
   const right = endLabels ? Math.ceil(Math.max(...series.map((k) => textW(fmt(lastOf(data, k)))))) + 18 : 14;
-  const top = 10, bottom = 26 + (chart.xLabel ? 16 : 0);
-  const pw = width - left - right, ph = height - top - bottom;
+  const top = 10;
+  const pw = width - left - right;
+  const cats = numericX ? null : [...new Set(data.map((r) => String(r.x)))];
+  // category labels: every bar keeps its label (wrapped onto two lines if needed); a line over many categories
+  // shows every k-th one instead
+  let catLines = null, every = 1;
+  if (cats) {
+    const band = pw / cats.length;
+    if (type === 'bar') catLines = cats.map((c) => wrapLabel(c, band - 6));
+    else every = Math.max(1, Math.ceil((Math.max(...cats.map((c) => textW(c))) + 10) / band));
+  }
+  const twoLines = catLines?.some((l) => l.length > 1);
+  const bottom = 26 + (twoLines ? 13 : 0) + (chart.xLabel ? 16 : 0);
+  const ph = height - top - bottom;
   const Y = (v) => top + ph - ((v - y0) / (y1 - y0 || 1)) * ph;
 
   // x scale
   let X, xTickEls = '';
-  const cats = numericX ? null : [...new Set(data.map((r) => String(r.x)))];
   if (numericX) {
     let xlo = Math.min(...data.map((r) => r.x)), xhi = Math.max(...data.map((r) => r.x));
     if (xlo === xhi) { xlo -= 1; xhi += 1; }
@@ -89,9 +100,13 @@ export function renderPlot(el, chart, { height = 240 } = {}) {
   } else {
     const band = pw / cats.length;
     X = (v) => left + band * (cats.indexOf(String(v)) + 0.5);
-    const maxW = Math.max(...cats.map((c) => textW(c)));
-    const every = Math.max(1, Math.ceil((maxW + 10) / band));
-    xTickEls = cats.map((c, i) => (i % every ? '' : `<text x="${X(c)}" y="${top + ph + 16}" text-anchor="middle">${esc(c.length > 14 ? `${c.slice(0, 13)}…` : c)}</text>`)).join('');
+    xTickEls = cats.map((c, i) => {
+      if (catLines) {
+        return `<text x="${X(c)}" y="${top + ph + 16}" text-anchor="middle"><title>${esc(c)}</title>${catLines[i]
+          .map((l, j) => `<tspan x="${X(c)}" dy="${j ? 13 : 0}">${esc(l)}</tspan>`).join('')}</text>`;
+      }
+      return i % every ? '' : `<text x="${X(c)}" y="${top + ph + 16}" text-anchor="middle">${esc(c.length > 14 ? `${c.slice(0, 13)}…` : c)}</text>`;
+    }).join('');
   }
 
   const grid = yt.map((v) => `<line x1="${left}" x2="${left + pw}" y1="${Y(v)}" y2="${Y(v)}" stroke="${v === 0 && type === 'bar' ? AXIS : GRID}" stroke-width="1" shape-rendering="crispEdges"/>
@@ -185,6 +200,21 @@ export function renderPlot(el, chart, { height = 240 } = {}) {
       show(`<div class="rc-th">${esc(h.row.x)}</div>${series.filter((k) => Number.isFinite(h.row[k])).map((k) => rowHtml(k, h.row[k])).join('')}`, h.x, (h.y0 + h.y1) / 2);
     }
   });
+}
+
+/** Split a label into at most two lines that fit `maxW` px, breaking at spaces; what still doesn't fit gets "…". */
+function wrapLabel(text, maxW) {
+  const fit = (t) => {
+    if (textW(t) <= maxW) return t;
+    while (t.length > 1 && textW(`${t}…`) > maxW) t = t.slice(0, -1);
+    return `${t.trimEnd()}…`;
+  };
+  if (textW(text) <= maxW) return [text];
+  const words = text.split(/\s+/);
+  let first = '';
+  while (words.length && textW(first ? `${first} ${words[0]}` : words[0]) <= maxW) first = first ? `${first} ${words.shift()}` : words.shift();
+  if (!first) return [fit(text)]; // one long word: no good break, so truncate it
+  return words.length ? [first, fit(words.join(' '))] : [first];
 }
 
 function lastOf(rows, k) {

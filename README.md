@@ -53,6 +53,8 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
 | **Office overview** — every project at a glance | **Usage** — tokens by day, model, project, session |
 | ![The office manager briefing on all projects](docs/screenshots/office-manager.png) | ![A room redecorated as a greenhouse with cherry blossoms outside](docs/screenshots/designer-redecorated.png) |
 | **Office manager** — a briefing across projects | **The designer** — redecorates on request |
+| ![Results window with a loss chart, a bar chart, a test-suite table and a takeaways note](docs/screenshots/results-window.png) | |
+| **Results** — charts and notes a session posted | |
 
 ## Requirements
 
@@ -93,7 +95,7 @@ Setup installs two things outside this folder:
 
 - **Hooks** for instant status (permission prompts, stop/end, compaction).
 - **The `office-todo` skill** in `~/.claude/skills/office-todo`, which lets your sessions read and update the to-do
-  boards and set their status bubble.
+  boards, set their status bubble and post results.
 
 The hooks go in your **global** `~/.claude/settings.json` (a copy is saved as `settings.json.office-backup`).
 The hook only forwards a few fields (session id, event name, tool name, cwd, a short message) to the local server and
@@ -129,9 +131,14 @@ There is no database. Sessions are read from Claude Code's own transcripts in `~
 kept in memory. What the office itself saves is plain JSON/Markdown:
 
 - `~/.claude/office/` — `settings.json`, `decor/` (room layouts, stored relative to the walls so they survive rooms
-  resizing), `room-sizes.json`, `todos/` (to-do boards), `catalog/` (furniture), `status/` (agents' status lines)
+  resizing), `room-sizes.json`, `todos/` (to-do boards), `catalog/` (furniture), `status/` (agents' status lines),
+  `results/` (posted results, one file per run, plus copies of posted images)
 - `~/.claude-office/staff/` — workspaces for the background agents (kept outside `~/.claude`, which Claude Code protects from edits)
 - `~/.claude-office/office-hook.mjs` — the installed hook
+
+Results that `watch` a file aren't copied: the office stores the file's path and reads it from where it is whenever
+it changes, so the chart stops updating if the file is moved or deleted. Agents can clear their results with
+`office-todo results clear`, and you can delete a run from the results window.
 
 Delete `~/.claude/office/` and `~/.claude-office/staff/` to reset the office. To remove it entirely, run
 `npm run uninstall` first, then delete `~/.claude/office/` and `~/.claude-office/`.
