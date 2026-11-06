@@ -147,6 +147,9 @@ machine-readable output, \`--by "<short label>"\` to describe yourself (e.g. "cl
   micro-steps and anything you'll finish within this task.
 - Never delete items the user created; mark them done or blocked instead.
 - If you stop working on something you claimed, \`release\` it so others can pick it up.
+- **Only use this CLI.** Never call the office's HTTP API (\`localhost:4777\` or \`OFFICE_PORT\`) or edit its files under
+  \`~/.claude/office/\` yourself, and never change \`CLAUDE_CODE_SESSION_ID\` or \`CLAUDE_OFFICE_RUN\` for it. The API is
+  the user's own controls: starting runs, approving checks and the Sequences setting are theirs to decide.
 
 ## Sequences: a chain of items, one fresh session each
 When the user asks you to turn work into a chain and run it ("make these sequential tasks and run them"), the office
@@ -171,8 +174,8 @@ waiting.
    Depending on the user's office setting, the office starts it right away, asks the user (it waits on the board with
    Start / Dismiss), or refuses: say which to the user. Board news tells you as items finish.
 - **If you were started by a sequence** (your prompt says "step N of up to M"), do your item only and end your turn;
-  never start sequences or other items yourself (the CLI refuses anyway). In a parallel run, commit your work on your
-  branch before \`done\`: the office won't merge uncommitted work.
+  never start sequences or other items yourself (the CLI refuses anyway), and don't start \`wait\`: the office watches
+  the run. In a parallel run, commit your work on your branch before \`done\`: the office won't merge uncommitted work.
 - A run stops for the user on anything but a clean, verified done (blocked, released, failed or unapproved check,
   merge conflict, session ended). If an item you depend on should change course, \`block\` it with why instead of
   letting the run go ahead.

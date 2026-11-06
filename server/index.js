@@ -230,7 +230,7 @@ const routes = {
       if (b.action === 'undepend') return removeDependency(slug, b.id, b.on, { by: 'you' });
       // the user's own check is approved as they type it; one a session set waits for 'approve-check'
       if (b.action === 'check') return setCheck(slug, b.id, { cmd: b.cmd, by: 'you', approved: true });
-      if (b.action === 'approve-check') return approveCheck(slug, b.id, b.cmd === undefined ? undefined : String(b.cmd));
+      if (b.action === 'approve-check') return approveCheck(slug, b.id, b.cmd);
       throw new Error('unknown action');
     });
     markDirty();

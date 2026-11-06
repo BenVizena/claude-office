@@ -81,7 +81,7 @@ export function runBannerHtml(board) {
   const r = board.run;
   if (!r) return '';
   const active = r.active || (r.current ? [r.current] : []);
-  const phase = { launching: 'starting a session', working: 'working', checking: 'running its check', merging: 'merging its branch' };
+  const phase = { launching: 'starting a session', working: 'working', checking: 'running its check', merging: 'merging its branch', rechecking: 'checking the merged result' };
   const stepLine = (st) => {
     const it = board.items.find((x) => x.id === st.id);
     const waiting = it?.status === 'done' && st.phase === 'working';
@@ -103,9 +103,11 @@ export function runBannerHtml(board) {
 }
 
 /** A session asked for a sequence (setting "ask me"): what it would run, with Start / Dismiss. */
-export function runRequestHtml(board) {
+export function runRequestHtml(board, v) {
   const q = board.runRequest;
   if (!q) return '';
+  const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+  const live = (v?.pods || []).find((p) => norm(p.path) === norm(q.worktree))?.live || 0;
   const scopeIds = new Set([q.root]);
   for (let grew = true; grew;) { // the run's scope: the item, its subtasks, what waits on them (as chain.js scopeOf)
     grew = false;
@@ -118,6 +120,7 @@ export function runRequestHtml(board) {
   return `<div class="td-run request">
       <div class="td-run-head"><b>✋ ${esc(q.by)} asks to run a sequence</b><span class="sub">from “${esc(q.rootText)}” in <span class="mono">${esc(q.worktree)}</span></span></div>
       ${items.map((x) => `<div class="sub">· ${esc(x.text)}${x.check ? ` <code>${esc(x.check.cmd)}</code>${x.check.approved ? '' : ' (check not approved)'}` : ''}</div>`).join('')}
+      ${live ? `<div class="sub">⚠ ${live} live session${live === 1 ? ' works' : 's work'} in that worktree (the one asking, most likely). With more than 1 at once, merges change files under ${live === 1 ? 'it' : 'them'} and their uncommitted edits stop the run: a worktree nobody works in is the safer base.</div>` : ''}
       ${unapproved.length ? `<div class="sub">It stops at ${unapproved.length === 1 ? 'the item' : 'items'} with an unapproved check until you approve ${unapproved.length === 1 ? 'it' : 'them'}.</div>` : ''}
       <div class="td-run-head">
         <label class="sub">up to <input type="number" data-req-max value="${q.max}" min="1" max="20" style="width:3.5em" /> sessions,</label>
@@ -141,7 +144,7 @@ export function sessionRunsHtml(mode) {
 /** Confirm row for "start a session on this": pick the worktree; the session opens in a terminal window. */
 function startRow(it, v, depth) {
   const pods = v.pods;
-  const label = (p) => `${p.branch || (p.detached ? 'detached HEAD' : 'no branch')}${p.isMain ? ' (main checkout)' : ''} — ${p.path}`;
+  const label = (p) => `${p.branch || (p.detached ? 'detached HEAD' : 'no branch')}${p.isMain ? ' (main checkout)' : ''}${p.live ? ` · ${p.live} live session${p.live === 1 ? '' : 's'}` : ''} — ${p.path}`;
   return `<div class="td-subadd td-start" style="--depth:${depth + 1}">
       <span class="sub">Start a Claude session on this in</span>
       ${pods.length > 1
@@ -151,7 +154,8 @@ function startRow(it, v, depth) {
       ${v.runActive ? '<span class="sub">(A sequence is already running on this board.)</span>' : `<label class="sub" title="When this is done, verified and its session's turn is over, the office starts the next ready item that waits on it (or its next subtask) in a new session. It stops on anything else: blocked, released, a failed or unapproved check, or the cap.">
         <input type="checkbox" data-start-seq="${it.id}" /> then keep going: start what waits on it, one at a time, up to
         <input type="number" data-start-max="${it.id}" value="5" min="1" max="20" style="width:3.5em" /> sessions,
-        <input type="number" data-start-par="${it.id}" value="1" min="1" max="4" style="width:3em" title="More than 1 runs items that don't wait on each other side by side, each in its own worktree and branch, merged into this worktree when done and verified (it must be on a branch and have no uncommitted changes when merging)" /> at once</label>`}
+        <input type="number" data-start-par="${it.id}" value="1" min="1" max="4" style="width:3em" title="More than 1 runs items that don't wait on each other side by side, each in its own worktree and branch, merged into this worktree when done and verified (it must be on a branch and have no uncommitted changes when merging)" /> at once</label>
+      <span class="sub">More than 1 at once merges finished items into this worktree: pick one nobody works in (a separate integration worktree is safest), since files change under a session there and uncommitted edits there stop the run.</span>`}
       <button class="ghost" data-todo-start-cancel="${it.id}">Cancel</button>
       <button class="primary" data-todo-start-go="${it.id}">Start</button>
     </div>`;
@@ -194,7 +198,7 @@ export function openTabHtml(board, v, sessions) {
   // roots still open (or with open subtasks)
   const hasOpen = (it) => it.status !== 'done' || kids(board, it.id).some(hasOpen);
   const roots = sortSibs(board.items.filter((it) => (!it.parent || !board.items.some((x) => x.id === it.parent)) && hasOpen(it)));
-  return `${runRequestHtml(board)}${runBannerHtml(board)}<div class="add-row"><input type="text" data-keep="todo" placeholder="Add a to-do…" /><button class="primary" data-todo-add>Add</button></div>
+  return `${runRequestHtml(board, v)}${runBannerHtml(board)}<div class="add-row"><input type="text" data-keep="todo" placeholder="Add a to-do…" /><button class="primary" data-todo-add>Add</button></div>
     <div class="td-list">${roots.map((it) => itemRow(it, board, v, sessions, 0)).join('') || '<p class="sub">Nothing open. 🎉</p>'}</div>`;
 }
 

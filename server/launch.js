@@ -14,7 +14,7 @@ import { RUN_ENV } from './runpolicy.js';
 const LAUNCH_DIR = path.join(STAFF_DIR, '..', 'launch');
 const CLI = path.join(REPO_DIR, 'bin', 'office-todo.js').replace(/\\/g, '/');
 
-function promptFor(board, id, step) {
+export function promptFor(board, id, step) {
   return `You were started from the Claude Office to-do board to work on item ${id} (board ${board}). `
     + `It is already claimed for this session. First run: node "${CLI}" show ${id} `
     + '- it has the task, its subtasks and any background other sessions left. Then do the work, following the office-todo skill '
@@ -26,12 +26,15 @@ function promptFor(board, id, step) {
     + 'before anything that depends on it starts). '
     + `When it is finished and verified, run: node "${CLI}" done ${id}. `
     + 'If you cannot finish it, leave what you found as background with `context` and release it. '
-    + `Right away, also start node "${CLI}" wait as a background command (run_in_background): it uses no tokens while it waits and `
-    + 'finishes when an item you follow changes (unblocked, finished by someone else, your claim taken over), printing what happened '
-    + '- start it again whenever it finishes and says you still follow items. If your claim is taken over, stop and check with `show`. '
-    + 'If the item still waits on other items (show marks them "waits on"), do not work around them: set your status to waiting '
-    + 'and end your turn; the watcher wakes you when they are done.'
-    + (step ? ` This is step ${step.n} of up to ${step.max} in a sequence started from the board. Do only this item: once it `
+    // A sequence step never waits on anything (it starts only once what it needs is done) and the office watches it:
+    // a `wait` there would only wake a finished step again when other items change.
+    + (step ? '' : `Right away, also start node "${CLI}" wait as a background command (run_in_background): it uses no tokens while it waits and `
+      + 'finishes when an item you follow changes (unblocked, finished by someone else, your claim taken over), printing what happened '
+      + '- start it again whenever it finishes and says you still follow items. If your claim is taken over, stop and check with `show`. '
+      + 'If the item still waits on other items (show marks them "waits on"), do not work around them: set your status to waiting '
+      + 'and end your turn; the watcher wakes you when they are done.')
+    + (step ? ` This is step ${step.n} of up to ${step.max} in a sequence started from the board, which watches it for you, so `
+      + 'do not start `wait`. Do only this item: once it '
       + 'is done (handoff notes left), end your turn and stop. The office then runs its check and starts the next item in a new '
       + 'session, so do not start other items or sequences yourself.' : '')
     + (step?.branch ? ` You are in your own git worktree (${step.branch.worktree}) on branch ${step.branch.branch}, made for this item `

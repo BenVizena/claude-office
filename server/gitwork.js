@@ -65,6 +65,24 @@ export async function mergeStep(base, branch, message) {
   return { ok: false, conflicts: conflicts.out ? conflicts.out.split(/\r?\n/) : [], error: r.err || r.out };
 }
 
+/** The commit a worktree has checked out, or null. */
+export async function headOf(dir) {
+  const r = await git(dir, ['rev-parse', 'HEAD']);
+  return r.ok ? r.out : null;
+}
+
+/**
+ * Take back a merge whose combined result failed its check: move the base back to `before`, but only while its HEAD is
+ * still `merged` (nobody committed on top meanwhile). `reset --keep` refuses rather than overwrite uncommitted edits
+ * made in the base while the check ran.
+ */
+export async function undoMerge(base, merged, before) {
+  const head = await headOf(base);
+  if (head !== merged) return { ok: false, error: `${base} moved on while the check ran (now at ${head ? head.slice(0, 8) : '?'})` };
+  const r = await git(base, ['reset', '--keep', before]);
+  return r.ok ? { ok: true } : { ok: false, error: r.err || r.out };
+}
+
 /** Commits on the step's branch that the base doesn't have yet. */
 export async function aheadCount(base, branch) {
   const r = await git(base, ['rev-list', '--count', `HEAD..${branch}`]);

@@ -313,6 +313,39 @@ describe('parallel runs', () => {
     assert.equal(await tick(s, o.ctx), 'idle');
   });
 
+  test('branches that each pass but break once merged: the merge is taken back and the run stops', async () => {
+    const base = repo();
+    fs.writeFileSync(path.join(base, 'lib.js'), 'exports.foo = () => 1;\n');
+    fs.writeFileSync(path.join(base, 'main.js'), '\n');
+    gitIn(base, 'add', '-A'); gitIn(base, 'commit', '-q', '-m', 'lib');
+    const s = fresh();
+    const root = add(s, 'root');
+    const a = add(s, 'rename foo'), b = add(s, 'call foo'), join = add(s, 'join');
+    for (const x of [a, b]) {
+      addDependency(s, x.id, root.id, { by: 't' });
+      addDependency(s, join.id, x.id, { by: 't' });
+      setCheck(s, x.id, { cmd: `"${process.execPath}" main.js`, by: 'you', approved: true });
+    }
+    updateItem(s, root.id, { status: 'done', by: 't' });
+    const o = parallelOffice(s, base);
+    o.ctx.runCheck = (cmd, cwd) => { o.checks.push({ cmd, cwd }); return runCheck(cmd, cwd); };
+    startRun(s, { root: root.id, worktree: base, parallel: 2 });
+    await tick(s, o.ctx);
+    o.work(a.id, 'lib.js', 'exports.bar = () => 1;\n'); // renamed: main.js doesn't call it yet, so A's check passes
+    assert.equal(await tick(s, o.ctx), 'advanced');
+    assert.ok(o.checks.some((c) => c.cwd === base), 'A was checked again in the base after merging');
+    const afterA = gitIn(base, 'rev-parse', 'HEAD');
+    o.work(b.id, 'main.js', 'require("./lib").foo();\n'); // passes on its branch, where foo still exists
+    assert.equal(await tick(s, o.ctx), 'stopped');
+    assert.match(readBoard(s).run.stopped.reason, /failed on the merged result.*merge was taken back/);
+    assert.equal(gitIn(base, 'rev-parse', 'HEAD'), afterA, 'the base is back where it was before B');
+    assert.deepEqual(await gitwork.dirtyFiles(base), []);
+    assert.equal(get(s, b.id).status, 'doing');
+    assert.match(get(s, b.id).note, /failed once merged/);
+    assert.match(gitIn(base, 'branch', '--list', 'office/*'), new RegExp(`office/${b.id}-`), "B's branch is kept");
+    assert.ok(!o.launched.some((x) => x.id === join.id), 'the join never started on the broken base');
+  });
+
   test('uncommitted work in a step worktree is not merged', async () => {
     const base = repo();
     const s = fresh();
@@ -433,6 +466,7 @@ describe('checks', () => {
     const a = add(s, 'x');
     assert.equal(setCheck(s, a.id, { cmd: 'npm test', by: 'claude', session: 'q' }).check.approved, false);
     assert.throws(() => approveCheck(s, a.id, 'npm run other'), /changed since you looked/);
+    assert.throws(() => approveCheck(s, a.id), /say which command/, 'approving without naming the command is refused');
     assert.equal(approveCheck(s, a.id, 'npm test').check.approved, true);
     assert.equal(setCheck(s, a.id, { cmd: 'npm test -- --x', by: 'claude' }).check.approved, false, 'a change needs approving again');
     assert.throws(() => setCheck(s, a.id, { cmd: 'a\nb' }), /one command line/);
@@ -451,5 +485,15 @@ describe('checks', () => {
     assert.equal(slow.ok, false);
     assert.equal(slow.timedOut, true);
     assert.equal((await runCheck('echo hi', '/no/such/dir')).ok, false);
+  });
+});
+
+describe('step prompts', () => {
+  test('a sequence step is not told to start the watcher; a plain ▶ session is', async () => {
+    const { promptFor } = await import('../server/launch.js');
+    assert.match(promptFor('b', 'x1', null), /wait as a background command/);
+    const step = promptFor('b', 'x1', { n: 2, max: 4 });
+    assert.doesNotMatch(step, /wait as a background command/);
+    assert.match(step, /do not start `wait`/);
   });
 });

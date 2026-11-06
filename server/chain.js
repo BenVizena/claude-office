@@ -7,9 +7,11 @@
 //
 // Parallel runs (parallel > 1) start up to that many ready items at once. Each then works in its own git worktree and
 // branch made from the base worktree's HEAD; when it is done and verified, the office merges its branch into the base
-// and removes the worktree, and only then can what waits on it start (so a join sees every branch's work). A merge
-// that conflicts, uncommitted work in the step's worktree or a dirty base sends the item back to "in progress" and
-// stops new starts; steps already running are still checked and merged ("draining"), then the run stops.
+// and, if the item has a check, runs it again on the merged result (branches that each pass can still break each
+// other once combined; a failure takes the merge back). Then it removes the worktree, and only then can what waits on
+// it start (so a join sees every branch's work). A merge that conflicts or fails that check, uncommitted work in the
+// step's worktree or a dirty base sends the item back to "in progress" and stops new starts;
+// steps already running are still checked and merged ("draining"), then the run stops.
 //
 // No Claude session orchestrates any of this, so waiting costs no tokens. The user starts runs from the office; a
 // session can ask for one (office-todo run), which the office starts, or asks the user about, as settings.sessionRuns
@@ -17,7 +19,7 @@
 //
 // board.run = { root, rootText, worktree, max, parallel, launched, steps, by, bySession?, startedAt, active: [step],
 //               log, lastSession?, stopping?: { reason, ok }, stopped?: { reason, at, ok } }
-// step      = { id, text, session?, at, phase: launching|working|checking|merging, worktree?, branch?, baseBranch? }
+// step      = { id, text, session?, at, phase: launching|working|checking|merging|rechecking, worktree?, branch?, baseBranch? }
 // board.runRequest = { root, rootText, max, parallel, worktree, by, bySession, at }  (a session asked; see requestRun)
 import { readBoard, mutate, children, openBlockers, claimIsStale, updateItem, addDetail, recordCheck } from './todos.js';
 import { checkDir } from './checks.js';
@@ -179,12 +181,27 @@ async function processStep(slug, board, run, step, ctx, now) {
         await reopen(slug, it, `done on ${step.branch}, not merged yet: the base worktree has uncommitted changes`, { title: `could not merge into ${run.worktree}: uncommitted changes there`, text: baseDirty.join('\n') });
         return { fail: `can't merge "${it.text}": ${run.worktree} has uncommitted changes (commit or stash them; ${step.branch} is kept)` };
       }
+      const before = await g.headOf(run.worktree);
       const m = await g.mergeStep(run.worktree, step.branch, `Merge ${step.branch}: ${it.text} (Claude Office sequence)`);
       if (!m.ok) {
         await reopen(slug, it, `done on ${step.branch}, but merging it conflicted`, { title: `merge conflict: ${step.branch} into ${step.baseBranch || 'the base'}`, text: `${m.conflicts.join('\n') || m.error}` });
         return { fail: m.conflicts.length
           ? `merging "${it.text}" (${step.branch}) conflicted in ${m.conflicts.slice(0, 3).join(', ')}${m.conflicts.length > 3 ? ', …' : ''}: its branch and worktree are kept`
           : `merging "${it.text}" (${step.branch}) failed: ${String(m.error).split(/\r?\n/)[0]} (its branch and worktree are kept)` };
+      }
+      // Branches that each passed can still break each other once combined (one renames what another starts
+      // calling, with no textual conflict): check the merged result too, before anything builds on it.
+      if (it.check) {
+        await patchStep(slug, it.id, (s, r) => { s.phase = 'rechecking'; logLine(r, `checking the merged result in ${run.worktree}: ${it.check.cmd}`); });
+        const res = await ctx.runCheck(it.check.cmd, run.worktree);
+        try { await whenUnlocked(() => recordCheck(slug, it.id, res)); } catch { /* the item may have gone */ }
+        if (!res.ok) {
+          const merged = await g.headOf(run.worktree);
+          const undo = merged && merged !== before ? await g.undoMerge(run.worktree, merged, before) : { ok: false, error: 'no merge commit to take back' };
+          const where = undo.ok ? `the merge was taken back; ${step.branch} and its worktree are kept` : `the merge is still in ${run.worktree} (${undo.error}): take it back yourself`;
+          await reopen(slug, it, `its check passed on ${step.branch} but failed once merged into ${step.baseBranch || 'the base'}: ${where}`, { title: `check failed after merging (exit ${res.code ?? '?'}): ${it.check.cmd}`, text: res.output });
+          return { fail: `the check for "${it.text}" failed on the merged result in ${run.worktree} (exit ${res.code ?? '?'}): ${where}` };
+        }
       }
       const rm = await g.removeStepWorktree(run.worktree, step.worktree, step.branch);
       await patchRun(slug, (r, b) => {

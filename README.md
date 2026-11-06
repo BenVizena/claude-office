@@ -30,8 +30,9 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
   as usual. Before marking its item done, a session leaves a handoff note on every item that waits on it.
 - **Checks.** An item can carry a command that proves it is done (`npm test`). Set one in the item's edit row, or a
   session sets one with `office-todo check <id> "..."`. The office only runs a check you approved (your own are
-  approved as you type them; one a session set shows an *approve* button), so sessions can't use the board to run
-  commands outside their own permission prompts. *run* on the item runs it now; its output goes into the background.
+  approved as you type them; one a session set shows an *approve* button), so a well-behaved session can't use
+  the board to run commands outside its own permission prompts (see the note on the API under *Sessions starting
+  sequences*). *run* on the item runs it now; its output goes into the background.
 - **Run in sequence.** In the ▶ dialog, tick *then keep going* to have the office work through the item, its
   subtasks and everything that waits on them, one fresh session at a time, up to a cap (default 5). It starts the
   next item only once the current one is done, its session's turn is over and its check passed. It stops and asks
@@ -42,19 +43,30 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
 - **Parallel sequences.** Set *at once* above 1 and items that don't wait on each other (a fan-out) run side by side,
   up to 4. Each gets its own git worktree and branch (`.claude/worktrees/office-<id>-…`, kept out of `git status`)
   made from the chosen worktree's HEAD; its session is told to commit there. When it is done and verified the office
-  merges the branch back into the chosen worktree and removes the worktree, and only then can what waits on it
-  start, so a join item sees every branch's work. A merge conflict, uncommitted work in the step's worktree or
-  uncommitted changes in the chosen worktree put the item back to in progress (its branch is kept) and stop new
-  starts. The chosen worktree must be on a branch. On Windows a step's folder can't be deleted while its terminal is
-  open; the office removes it once you close the window.
+  merges the branch back into the chosen worktree, runs the item's check again on the merged result (two branches
+  can each pass and still break each other once combined) and removes the worktree, and only then can what waits on
+  it start, so a join item sees every branch's work. A merge conflict, a check that fails after merging (the merge is
+  taken back), uncommitted work in the step's worktree or uncommitted changes in the chosen worktree put the item
+  back to in progress (its branch is kept) and stop new starts. On Windows a step's folder can't be deleted while its
+  terminal is open; the office removes it once you close the window. Things to know:
+  - **Pick a worktree nobody works in.** Merges land in the chosen worktree (it must be on a branch), so files change
+    under any session or editor working there, and your own uncommitted edits there stop the run. A separate
+    worktree on an integration branch is the safest base; the dialog shows how many live sessions each one has.
+  - **Every step is an interactive session.** Four at once means approving permission prompts in four windows.
+    Pre-approving commands lets a run go on without you, but these sessions are not sandboxed, so approve with care.
+  - **Step worktrees live inside the repo** (like Claude Code's own). Tools that walk folders in the base (jest,
+    eslint, tsc, IDE indexers) may find a copy of the code per step, e.g. jest's "duplicate module" errors; exclude
+    `.claude/worktrees/` in their config if they do.
 - **Sessions starting sequences.** A session can plan a chain on the board and ask for it to run with
   `office-todo run <id> [--max N] [--parallel N]` (the skill teaches how). The *Sequences* setting under a project
   board decides: *only me* (refused), *sessions may ask* (the default: the plan waits on the board with Start /
   Dismiss and the session's desk shows ✋) or *sessions may start them*. Sessions that a sequence started can never
   start one, and sequences started by sessions share a daily cap of 20 sessions (`sessionRunDailyCap` in
-  `~/.claude/office/settings.json`). These are rules for well-behaved sessions, not a sandbox: a session with
-  unrestricted shell access could edit the board files or call the office's API itself, so keep approving shell
-  commands as usual.
+  `~/.claude/office/settings.json`). These settings decide how well-behaved sessions ask; they are not a security
+  boundary. The office's API can't tell its own page from any other program on your machine, so a session that
+  runs `curl` or a script against it could start a run, approve a check or edit the board files, whatever the
+  setting says. The skill tells sessions never to call the API, and the step check that sessions are
+  sequence-started relies on environment variables they could change. Keep reviewing shell commands as usual.
 - **Results.** Sessions can post charts, tables, images and short notes (test runs, benchmarks, training metrics)
   with `office-todo results …`, partial results included. A small screen with a live sparkline goes up on the
   agent's desk and a "📊 View results" tab sits above its speech bubble; click either to open the results window.
@@ -184,7 +196,8 @@ Delete `~/.claude/office/` and `~/.claude-office/staff/` to reset the office. To
 `npm run uninstall` first, then delete `~/.claude/office/` and `~/.claude-office/`.
 
 Nothing leaves your machine except the `claude -p` calls above. The server binds to 127.0.0.1 only, rejects requests
-whose `Host` isn't `localhost`/`127.0.0.1` (DNS-rebinding protection) and refuses cross-site requests.
+whose `Host` isn't `localhost`/`127.0.0.1` (DNS-rebinding protection) and refuses cross-site requests. It has no
+login: any program running as you can call it, Claude sessions with shell access included.
 Set `OFFICE_PORT` to use a port other than 4777.
 
 Settings (`~/.claude/office/settings.json`): `roomMaxAgeDays`, `sessionMaxAgeDays`, `showBackgroundSessions`,

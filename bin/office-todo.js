@@ -421,6 +421,7 @@ ${d.text}`);
       console.log(tree(b, items));
       const unchecked = items.filter((i) => !i.check?.approved);
       if (unchecked.some((i) => i.check)) console.log(`\nnote: ${unchecked.filter((i) => i.check).map((i) => i.id).join(', ')} have checks the user hasn't approved: the run stops there until they do.`);
+      if (r.parallel > 1) console.log(`\nnote: finished items are merged into ${here}, the worktree you are in: files there change under you while it runs, and uncommitted edits there stop the run. Don't edit files there meanwhile; tell the user a worktree nobody works in is the safer base.`);
       if (policy.ask) {
         try { setStatus(session, { text: `Asked to run "${r.rootText}" in sequence`, needsYou: `Start the sequence on "${r.rootText}" (${items.length} items)? It's waiting on the board.` }); } catch { /* best effort */ }
         console.log('\nThe user approves it on the board (it shows there with Start / Dismiss). Board news tells you as items finish: run `wait` in the background if you want to hear.');

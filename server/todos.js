@@ -258,12 +258,16 @@ export function setCheck(slug, id, { cmd, by = 'you', session, approved = false 
   });
 }
 
-/** The user approves the check as it stands now (expected = the command they saw, so a quiet swap can't be approved). */
+/**
+ * The user approves the check as it stands now. expected = the command they saw, required, so a quiet swap between
+ * seeing it and approving it can't be approved.
+ */
 export function approveCheck(slug, id, expected) {
+  if (typeof expected !== 'string') throw new Error('say which command you approve (cmd)');
   return mutate(slug, null, (b) => {
     const it = find(b, id);
     if (!it.check) throw new Error('that item has no check');
-    if (expected !== undefined && it.check.cmd !== expected) throw new Error('the check changed since you looked at it: have another look');
+    if (it.check.cmd !== expected) throw new Error('the check changed since you looked at it: have another look');
     it.check.approved = true;
     it.check.approvedAt = Date.now();
     it.updatedAt = Date.now();

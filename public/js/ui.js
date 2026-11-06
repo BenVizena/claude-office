@@ -252,7 +252,7 @@ export class UI {
     // worktrees a "start a session on this" can open in (project boards only)
     v.checksRunning = new Set(state.checksRunning || []);
     v.runActive = !!(board.run && !board.run.stopped);
-    v.pods = !lobby && room.kind === 'project' ? room.pods.filter((p) => !p.removed).map(({ path, branch, detached, isMain }) => ({ path, branch, detached, isMain })) : [];
+    v.pods = !lobby && room.kind === 'project' ? room.pods.filter((p) => !p.removed).map(({ path, branch, detached, isMain, sessions: ss }) => ({ path, branch, detached, isMain, live: (ss || []).filter((s) => s.status !== 'gone').length })) : [];
     // refresh open background panels when agents add more
     for (const id of v.expanded || []) {
       for (const b of boards) {
