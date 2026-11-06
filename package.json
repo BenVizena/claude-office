@@ -1,0 +1,24 @@
+{
+  "name": "claude-office",
+  "version": "0.1.0",
+  "description": "A light, airy isometric office that visualizes your Claude Code sessions, worktrees and branches.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "install-hooks": "node scripts/install.js hooks",
+    "install-skill": "node scripts/install.js skill",
+    "uninstall": "node scripts/install.js uninstall"
+  },
+  "bin": {
+    "office-todo": "bin/office-todo.js"
+  },
+  "dependencies": {
+    "three": "^0.187.0",
+    "ws": "^8.22.1"
+  }
+}

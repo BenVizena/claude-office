@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Claude Office</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏢</text></svg>" />
+  <link rel="stylesheet" href="/css/office.css" />
+  <script type="importmap">
+    { "imports": {
+        "three": "/vendor/three/build/three.module.js",
+        "three/addons/": "/vendor/three/examples/jsm/"
+    } }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="labels"></div>
+
+  <header id="hud">
+    <div class="brand"><span class="dot"></span> Claude Office</div>
+    <div id="hud-room" class="pill">Lobby</div>
+    <div id="hud-stats" class="pill subtle"></div>
+    <div class="spacer"></div>
+    <button id="btn-alerts" class="pill alert hidden" title="Agents waiting for you"></button>
+    <button id="btn-sound" class="icon" title="Toggle sound (M)">🔇</button>
+    <button id="btn-help" class="icon" title="Controls">?</button>
+  </header>
+
+  <div id="hint" class="hidden"></div>
+  <div id="conn" class="hidden">Reconnecting to the office server…</div>
+
+  <aside id="panel" class="hidden">
+    <button class="close" title="Close (Esc)">×</button>
+    <div class="panel-body"></div>
+  </aside>
+
+  <div id="help" class="hidden">
+    <h3>Getting around</h3>
+    <ul>
+      <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows — walk (hold <kbd>Shift</kbd> to hurry)</li>
+      <li><kbd>E</kbd> — talk to / look at whatever is next to you</li>
+      <li>Click the floor — walk there · Click anything else — open it</li>
+      <li>Right-click furniture — ask the designer about it, move, rotate, resize, duplicate, remove, or let it wander</li>
+      <li>Mouse wheel — zoom</li>
+      <li><kbd>M</kbd> — sound on/off · <kbd>Esc</kbd> — close panel</li>
+      <li><kbd>1</kbd>–<kbd>9</kbd> — jump to a room · <kbd>0</kbd> — lobby</li>
+    </ul>
+    <h3>Reading the office</h3>
+    <ul>
+      <li>Each room is a project; each desk pod is a worktree, its sign shows the branch.</li>
+      <li>Each character is a Claude Code session. Typing = working, sipping coffee = idle,
+        jacket on the chair = stepped away, ✋ = needs your input.</li>
+      <li>Mugs and energy cans pile up as a session's context fills. Paper stacks = uncommitted files.</li>
+      <li>Dust and cobwebs collect on desks that haven't been touched in days.</li>
+      <li>Talk to the designer by the door to redecorate a room.</li>
+    </ul>
+    <button class="primary" onclick="document.getElementById('help').classList.add('hidden')">Got it</button>
+  </div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
