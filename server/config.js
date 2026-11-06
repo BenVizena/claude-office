@@ -16,6 +16,20 @@ export const TODO_DIR = path.join(OFFICE_DIR, 'todos');
 export const CATALOG_DIR = path.join(OFFICE_DIR, 'catalog');
 export const SETTINGS_FILE = path.join(OFFICE_DIR, 'settings.json');
 export const PORT = Number(process.env.OFFICE_PORT) || 4777;
+// install-hooks copies the hook here so moving or deleting the clone can't break Claude Code
+export const HOOK_SRC = path.join(REPO_DIR, 'hooks', 'office-hook.mjs');
+export const HOOK_FILE = path.join(HOME, '.claude-office', 'office-hook.mjs');
+
+/** Refresh the installed hook copy after a `git pull` changed it (only if hooks are installed). */
+export function syncHookCopy() {
+  try {
+    if (!fs.existsSync(HOOK_FILE)) return false;
+    const src = fs.readFileSync(HOOK_SRC);
+    if (src.equals(fs.readFileSync(HOOK_FILE))) return false;
+    fs.writeFileSync(HOOK_FILE, src);
+    return true;
+  } catch { return false; }
+}
 
 for (const d of [OFFICE_DIR, STAFF_DIR, DECOR_DIR, TODO_DIR, CATALOG_DIR,
   path.join(CATALOG_DIR, 'items'), path.join(CATALOG_DIR, 'pending')]) {

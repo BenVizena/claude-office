@@ -3,7 +3,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
-import { PORT, REPO_DIR, CATALOG_DIR, loadSettings, saveSettings, resolveBlender } from './config.js';
+import { PORT, REPO_DIR, CATALOG_DIR, loadSettings, saveSettings, resolveBlender, syncHookCopy } from './config.js';
 import { SessionScanner } from './scanner.js';
 import { buildOffice } from './office.js';
 import { Catalog, DecorStore } from './decor.js';
@@ -12,6 +12,7 @@ import { addItem, updateItem, removeItem, claimItem, releaseItem, addDetail, rea
 import { computeUsage } from './usage.js';
 
 let settings = loadSettings();
+if (syncHookCopy()) console.log('Updated the installed Claude Code hook to this version.');
 const getSettings = () => settings;
 const scanner = new SessionScanner(getSettings);
 const catalog = new Catalog();

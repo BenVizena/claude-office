@@ -10,6 +10,8 @@
   },
   "scripts": {
     "start": "node server/index.js",
+    "setup": "node scripts/install.js setup",
+    "status": "node scripts/install.js status",
     "install-hooks": "node scripts/install.js hooks",
     "install-skill": "node scripts/install.js skill",
     "uninstall": "node scripts/install.js uninstall"

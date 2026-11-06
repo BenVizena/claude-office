@@ -37,30 +37,45 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
 Developed and tested on **Windows 11**. macOS and Linux should work (paths are resolved from your home directory
 and Blender/Claude are looked up in the usual places and on PATH) but haven't been tested yet — issues welcome.
 
-## Run
+## Install
+
+Let Claude Code do it:
 
 ```bash
 git clone https://github.com/BenVizena/claude-office
 cd claude-office
+claude
+```
+
+Accept the "trust this folder" prompt (that's what lets Claude Code load the repo's setup skill), then type
+**`/setup-office`** or just ask it to set things up. It checks your Node and git, installs everything below (explaining each step first),
+offers to install Blender, starts the office and makes sure it's working.
+
+Or by hand:
+
+```bash
 npm install
+npm run setup        # installs the hooks and the office-todo skill, then checks everything
 npm start            # http://localhost:4777
 ```
 
-Optional (recommended):
+Next time, just run `npm start` in this folder. `npm run status` checks the install; `npm run uninstall` removes
+the hooks and the skill.
 
-```bash
-npm run install-hooks   # instant status: permission prompts, stop/end, compaction (backs up ~/.claude/settings.json)
-npm run install-skill   # ~/.claude/skills/office-todo — lets agents read/update the to-do boards
-npm run uninstall       # removes both
-```
+Setup installs two things outside this folder:
 
-`install-hooks` edits your **global** `~/.claude/settings.json` (a copy is saved as `settings.json.office-backup`).
+- **Hooks** for instant status (permission prompts, stop/end, compaction).
+- **The `office-todo` skill** in `~/.claude/skills/office-todo`, which lets your sessions read and update the to-do
+  boards and set their status bubble.
+
+The hooks go in your **global** `~/.claude/settings.json` (a copy is saved as `settings.json.office-backup`).
 The hook only forwards a few fields (session id, event name, tool name, cwd, a short message) to the local server and
 always exits immediately, so it never slows down or blocks Claude Code — even when the office isn't running.
-The hook script is copied to `~/.claude-office/`, so it keeps working if you move or delete the clone.
+The hook script is copied to `~/.claude-office/` (and refreshed when you pull a new version), so it keeps working if
+you move or delete the clone.
 
-The `office-todo` skill runs the to-do CLI from inside the clone. **If you move the folder, run
-`npm run install-skill` again from the new location; before deleting it, run `npm run uninstall`.**
+The `office-todo` skill runs the to-do CLI from inside the clone. **If you move the folder, run `npm run setup` again
+from the new location; before deleting it, run `npm run uninstall`.**
 
 ## Costs and permissions
 

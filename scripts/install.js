@@ -1,16 +1,19 @@
 // Install / uninstall the Claude Office hooks and the office-todo skill.
+//   node scripts/install.js setup      # hooks + skill, then status (used by the /setup-office skill)
+//   node scripts/install.js status     # check prerequisites and what's installed
 //   node scripts/install.js hooks      # add hooks to ~/.claude/settings.json (backs it up first)
 //   node scripts/install.js skill      # create ~/.claude/skills/office-todo/SKILL.md
 //   node scripts/install.js uninstall  # remove both
 import fs from 'node:fs';
 import path from 'node:path';
-import { CLAUDE_DIR, HOME, REPO_DIR } from '../server/config.js';
+import http from 'node:http';
+import { execFileSync } from 'node:child_process';
+import { CLAUDE_DIR, REPO_DIR, HOOK_SRC, HOOK_FILE, PORT, loadSettings, resolveBlender } from '../server/config.js';
 
 const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
 // The hook has no imports, so it's copied out of the repo: moving or deleting the clone can't break Claude Code.
-const HOOK_SRC = path.join(REPO_DIR, 'hooks', 'office-hook.mjs');
-const HOOK_DIR = path.join(HOME, '.claude-office');
-const HOOK_FILE = path.join(HOOK_DIR, 'office-hook.mjs');
+// The server refreshes the copy on startup when a pull changed it (syncHookCopy).
+const HOOK_DIR = path.dirname(HOOK_FILE);
 const HOOK = HOOK_FILE.replace(/\\/g, '/');
 const MARK = 'office-hook.mjs';
 const EVENTS = {
@@ -134,15 +137,57 @@ ${T} status --clear
   console.log(`Skill installed at ${SKILL_DIR}`);
 }
 
+function serverUp() {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port: PORT, path: '/', timeout: 1500 }, (res) => { res.resume(); resolve(res.statusCode === 200); });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
+
+function version(cmd, args) {
+  try { return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], shell: process.platform === 'win32' }).trim().split('\n')[0]; } catch { return null; }
+}
+
+/** One line per check, prefixed OK / MISSING / OPTIONAL, so people and the setup skill can both read it. */
+async function status() {
+  const settings = loadSettings();
+  const s = readSettings();
+  const hooksIn = JSON.stringify(s.hooks || {}).includes(HOOK);
+  const nodeMajor = Number(process.versions.node.split('.')[0]);
+  const git = version('git', ['--version']);
+  const claude = settings.claudePath;
+  const claudeOk = path.isAbsolute(claude) ? fs.existsSync(claude) : !!version(claude, ['--version']);
+  const blender = resolveBlender(settings);
+  const lines = [
+    [nodeMajor >= 20, `Node.js ${process.versions.node}${nodeMajor >= 20 ? '' : ' (need 20 or newer)'}`],
+    [!!git, git || 'git not found on PATH'],
+    [claudeOk, claudeOk ? `Claude Code: ${claude}` : `Claude Code not found (claudePath = ${claude})`],
+    [fs.existsSync(path.join(REPO_DIR, 'node_modules', 'ws')), 'npm dependencies installed'],
+    [hooksIn && fs.existsSync(HOOK_FILE), `hooks in ${SETTINGS}`],
+    [fs.existsSync(path.join(SKILL_DIR, 'SKILL.md')), `office-todo skill in ${SKILL_DIR}`],
+    [blender ? true : 'optional', blender ? `Blender: ${blender}` : 'Blender not installed (only needed to model new furniture)'],
+    [await serverUp() ? true : 'optional', `office server on http://localhost:${PORT}`],
+  ];
+  for (const [ok, text] of lines) console.log(`${ok === true ? 'OK      ' : ok === 'optional' ? 'OPTIONAL' : 'MISSING '} ${text}`);
+  return lines.every(([ok]) => ok);
+}
+
 const cmd = process.argv[2];
 if (cmd === 'hooks') installHooks();
 else if (cmd === 'skill') installSkill();
-else if (cmd === 'uninstall') {
+else if (cmd === 'status') process.exitCode = (await status()) ? 0 : 1;
+else if (cmd === 'setup') {
+  installHooks();
+  installSkill();
+  console.log('');
+  process.exitCode = (await status()) ? 0 : 1;
+} else if (cmd === 'uninstall') {
   writeSettings(stripOurs(readSettings()));
   fs.rmSync(SKILL_DIR, { recursive: true, force: true });
   fs.rmSync(HOOK_FILE, { force: true });
   console.log('Removed Claude Office hooks and the office-todo skill.');
 } else {
-  console.log('usage: node scripts/install.js hooks|skill|uninstall');
+  console.log('usage: node scripts/install.js setup|status|hooks|skill|uninstall');
   process.exit(2);
 }
