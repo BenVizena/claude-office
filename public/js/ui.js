@@ -331,26 +331,27 @@ export class UI {
   usageHtml() {
     const u = this.getUsage();
     if (!u) return `<h2>Usage</h2><p class="sub">Crunching your transcripts…</p>`;
+    const usd = (n) => `$${(n || 0) >= 100 ? Math.round(n).toLocaleString() : (n || 0).toFixed(2)}`;
     const max = Math.max(1, ...u.days.map((d) => d.total));
-    const bars = u.days.map((d) => `<div title="${d.date}: ${fmtTok(d.total)} tokens" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:120px">
+    const bars = u.days.map((d) => `<div title="${d.date}: ${fmtTok(d.total)} tokens · ≈ ${usd(d.usd)} at API prices" style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:120px">
       <div style="height:${(d.total / max) * 100}%;background:${d.date === u.days[u.days.length - 1].date ? '#d97757' : '#a9c1d9'};border-radius:4px 4px 0 0;min-height:1px"></div></div>`).join('');
     const tbl = (rows, cols) => `<table><tr>${cols.map((c) => `<th>${c}</th>`).join('')}</tr>${rows.join('')}</table>`;
     return `<h2>Usage</h2>
       <p class="sub">From your local transcripts (main sessions + subagents), last ${u.days.length} days. Plan limits from <code>/usage</code> aren't stored locally — run <code>/usage</code> in Claude Code for those percentages.</p>
       <div class="kv">
-        <div>Today</div><div><b>${fmtTok(u.today.total)}</b> tokens · ${fmtTok(u.today.output)} output · ${u.today.turns} turns</div>
-        <div>Last 7 days</div><div><b>${fmtTok(u.week.total)}</b> tokens · ${fmtTok(u.week.output)} output · ${u.week.turns} turns</div>
+        <div>Today</div><div><b>${fmtTok(u.today.total)}</b> tokens · ${fmtTok(u.today.output)} output · ${u.today.turns} turns · <b>${usd(u.today.usd)}</b></div>
+        <div>Last 7 days</div><div><b>${fmtTok(u.week.total)}</b> tokens · ${fmtTok(u.week.output)} output · ${u.week.turns} turns · <b>${usd(u.week.costUsd)}</b></div>
         <div>Cache hit</div><div>${Math.round(u.week.cacheHit * 100)}% of input read from cache</div>
         <div>Subagents</div><div>${Math.round(u.week.subagentShare * 100)}% of this week's tokens</div>
-        ${typeof u.week.costUsd === 'number' ? `<div>API-equivalent</div><div>≈ $${u.week.costUsd.toFixed(2)} this week <span class="sub">(list prices; your plan isn't billed this way)</span></div>` : ''}
+        <div>API-equivalent</div><div>≈ <b>${usd(u.week.costUsd)}</b> this week · ${usd(u.windowUsd)} over ${u.days.length} days <span class="sub">(what this would cost on the pay-as-you-go API at list prices; your plan isn't billed this way)</span></div>
       </div>
       <h3>Daily tokens</h3><div style="display:flex;gap:3px;align-items:flex-end">${bars}</div>
       <h3>By model (7 days)</h3>
-      ${tbl(u.week.byModel.map((m) => `<tr><td class="mono">${esc(m.model)}</td><td>${fmtTok(m.total)}</td><td class="sub">${fmtTok(m.output)} out</td><td class="sub">${Math.round(m.share * 100)}%</td></tr>`), ['Model', 'Tokens', 'Output', 'Share'])}
+      ${tbl(u.week.byModel.map((m) => `<tr><td class="mono">${esc(m.model)}</td><td>${fmtTok(m.total)}</td><td class="sub">${fmtTok(m.output)} out</td><td>${usd(m.usd)}</td><td class="sub">${Math.round(m.share * 100)}%</td></tr>`), ['Model', 'Tokens', 'Output', 'API $', 'Share'])}
       <h3>By project (7 days)</h3>
-      ${tbl(u.week.byProject.map((p) => `<tr><td>${esc(p.name)}</td><td>${fmtTok(p.total)}</td><td class="sub">${Math.round(p.share * 100)}%</td></tr>`), ['Project', 'Tokens', 'Share'])}
+      ${tbl(u.week.byProject.map((p) => `<tr><td>${esc(p.name)}</td><td>${fmtTok(p.total)}</td><td>${usd(p.usd)}</td><td class="sub">${Math.round(p.share * 100)}%</td></tr>`), ['Project', 'Tokens', 'API $', 'Share'])}
       <h3>Heaviest sessions (7 days)</h3>
-      ${tbl(u.week.topSessions.map((s) => `<tr class="clickable" data-open-session="${esc(s.id)}"><td>${esc(s.title)}<div class="sub">${esc(s.project)}</div></td><td>${fmtTok(s.total)}</td></tr>`), ['Session', 'Tokens'])}
+      ${tbl(u.week.topSessions.map((s) => `<tr class="clickable" data-open-session="${esc(s.id)}"><td>${esc(s.title)}<div class="sub">${esc(s.project)}</div></td><td>${fmtTok(s.total)}</td><td>${usd(s.usd)}</td></tr>`), ['Session', 'Tokens', 'API $'])}
       <p class="sub">“Tokens” counts everything sent and received, including cached input (which is much cheaper), so totals look large.</p>`;
   }
 

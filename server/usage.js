@@ -25,9 +25,9 @@ export async function computeUsage(scanner) {
   const week = new Set(days.slice(-7));
   const inWindow = new Set(days);
   const today = days[days.length - 1];
-  const perDay = Object.fromEntries(days.map((d) => [d, { date: d, total: 0, output: 0, turns: 0 }]));
-  const W = { total: 0, output: 0, turns: 0, in: 0, cr: 0, cw: 0, sub: 0, byModel: {}, byProject: {}, sessions: [] };
-  const T = { total: 0, output: 0, turns: 0 };
+  const perDay = Object.fromEntries(days.map((d) => [d, { date: d, total: 0, output: 0, turns: 0, usd: 0 }]));
+  const W = { total: 0, output: 0, turns: 0, usd: 0, in: 0, cr: 0, cw: 0, sub: 0, byModel: {}, byProject: {}, sessions: [] };
+  const T = { total: 0, output: 0, turns: 0, usd: 0 };
   const windowSessions = [];
   let bgTokens = 0, windowTotal = 0;
   const bgNames = new Set();
@@ -36,21 +36,22 @@ export async function computeUsage(scanner) {
     let project = 'unknown';
     if (isStaffPath(s.cwd)) project = 'Claude Office staff';
     else { try { project = path.basename((await resolveRoot(s.cwd)).root); } catch { /* keep */ } }
-    let sTotal = 0, sWeek = 0;
+    let sTotal = 0, sWeek = 0, sWeekUsd = 0;
     for (const [day, models] of Object.entries(s.usage)) {
       if (!inWindow.has(day)) continue;
       for (const [model, r] of Object.entries(models)) {
         const tot = r.in + r.out + r.cr + r.cw;
+        const usd = r.usd || 0;
         sTotal += tot;
-        perDay[day].total += tot; perDay[day].output += r.out; perDay[day].turns += r.turns;
-        if (day === today) { T.total += tot; T.output += r.out; T.turns += r.turns; }
+        perDay[day].total += tot; perDay[day].output += r.out; perDay[day].turns += r.turns; perDay[day].usd += usd;
+        if (day === today) { T.total += tot; T.output += r.out; T.turns += r.turns; T.usd += usd; }
         if (week.has(day)) {
-          sWeek += tot;
-          W.total += tot; W.output += r.out; W.turns += r.turns; W.in += r.in; W.cr += r.cr; W.cw += r.cw; W.sub += r.sub;
-          const m = (W.byModel[shortModel(model)] ||= { model: shortModel(model), total: 0, output: 0 });
-          m.total += tot; m.output += r.out;
-          const p = (W.byProject[project] ||= { name: project, total: 0 });
-          p.total += tot;
+          sWeek += tot; sWeekUsd += usd;
+          W.total += tot; W.output += r.out; W.turns += r.turns; W.in += r.in; W.cr += r.cr; W.cw += r.cw; W.sub += r.sub; W.usd += usd;
+          const m = (W.byModel[shortModel(model)] ||= { model: shortModel(model), total: 0, output: 0, usd: 0 });
+          m.total += tot; m.output += r.out; m.usd += usd;
+          const p = (W.byProject[project] ||= { name: project, total: 0, usd: 0 });
+          p.total += tot; p.usd += usd;
         }
       }
     }
@@ -59,16 +60,17 @@ export async function computeUsage(scanner) {
       windowTotal += sTotal;
       if (s.entrypoint && s.entrypoint !== 'cli' && !isStaffPath(s.cwd)) { bgTokens += sTotal; bgNames.add(project); }
     }
-    if (sWeek > 0) W.sessions.push({ id: s.id, title: s.title || 'Untitled', project, total: sWeek });
+    if (sWeek > 0) W.sessions.push({ id: s.id, title: s.title || 'Untitled', project, total: sWeek, usd: sWeekUsd });
   }
 
   const share = (x) => (W.total ? x / W.total : 0);
   const value = {
     generatedAt: Date.now(),
     days: Object.values(perDay),
+    windowUsd: Object.values(perDay).reduce((n, d) => n + d.usd, 0),
     today: T,
     week: {
-      total: W.total, output: W.output, turns: W.turns,
+      total: W.total, output: W.output, turns: W.turns, costUsd: W.usd,
       cacheHit: W.in + W.cr + W.cw ? W.cr / (W.in + W.cr + W.cw) : 0,
       subagentShare: share(W.sub),
       byModel: Object.values(W.byModel).sort((a, b) => b.total - a.total).map((m) => ({ ...m, share: share(m.total) })),

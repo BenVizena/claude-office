@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PROJECTS_DIR } from './config.js';
+import { costOf } from './pricing.js';
 
 const DAY = 86400000;
 
@@ -134,7 +135,7 @@ function newSession(id, file) {
     subagents: [],
     // usage + efficiency
     seenMsgIds: new Set(),
-    usage: {},        // day -> model -> { in, out, cr, cw, turns, sub }
+    usage: {},        // day -> model -> { in, out, cr, cw, turns, sub, usd }
     eff: { cacheRebuilds: 0, cacheRebuildTokens: 0, bigContextTurns: 0, bigContextTokens: 0, reads: {}, bigToolResults: 0, bigToolChars: 0, prevMainTs: 0 },
   };
 }
@@ -150,9 +151,10 @@ function recordUsage(s, m, ts, sub) {
   const day = dayKey(ts);
   const model = m.model || 'unknown';
   const byModel = (s.usage[day] ||= {});
-  const r = (byModel[model] ||= { in: 0, out: 0, cr: 0, cw: 0, turns: 0, sub: 0 });
+  const r = (byModel[model] ||= { in: 0, out: 0, cr: 0, cw: 0, turns: 0, sub: 0, usd: 0 });
   const tin = u.input_tokens || 0, tout = u.output_tokens || 0, cr = u.cache_read_input_tokens || 0, cw = u.cache_creation_input_tokens || 0;
   r.in += tin; r.out += tout; r.cr += cr; r.cw += cw; r.turns++;
+  r.usd += costOf(model, u) || 0;
   if (sub) r.sub += tin + tout + cr + cw;
   if (!sub) {
     const e = s.eff;
