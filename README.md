@@ -38,7 +38,7 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
   office starts sessions in: your usual default (no flag), ask me, accept edits, auto, or never ask.
 - **Run in sequence.** In the ▶ dialog, tick *then keep going* to have the office work through the item, its
   subtasks and everything that waits on them, one fresh session at a time, up to a cap (default 5, at most 15). A
-  board runs up to 5 sequences at once, as long as no two share an open item. Each starts the
+  board runs up to 15 sequences at once, as long as no two share an open item. Each starts the
   next item only once the current one is done, its session's turn is over and its check passed. It stops and asks
   for you (✋ at that session's desk) if an item is blocked, released, reopened or taken over, its session ended,
   its check failed (the item goes back to in progress, with the output attached) or isn't approved. No Claude

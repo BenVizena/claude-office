@@ -30,7 +30,7 @@ import crypto from 'node:crypto';
 import { checkDir } from './checks.js';
 import { whenUnlocked } from './lock.js';
 
-export const MAX_STEPS = 15, DEFAULT_STEPS = 5, MAX_PARALLEL = 4, MAX_RUNS = 5;
+export const MAX_STEPS = 15, DEFAULT_STEPS = 5, MAX_PARALLEL = 4, MAX_RUNS = 15;
 const MAX_KEPT_STOPPED = 5; // finished or stopped runs kept on a board for the user to read
 const TURN_GRACE_MS = 60000;      // marked done while its session sat idle (e.g. by the user): don't wait for a Stop
 const NO_HOOKS_MS = 5 * 60000;    // no hook seen from it at all (office restarted?): assume its turn is over

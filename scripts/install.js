@@ -174,15 +174,22 @@ waiting.
    and branch made from your current worktree and merged back into it when done and verified; use it only for
    fan-outs whose steps don't touch the same files, and only when your worktree is committed and on a branch.
    Depending on the user's office setting, the office starts it right away, asks the user (it waits on the board with
-   Start / Dismiss), or refuses: say which to the user. Board news tells you as items finish. A board runs up to 5
+   Start / Dismiss), or refuses: say which to the user. Board news tells you as items finish. A board runs up to 15
    sequences at once, as long as no two share an open item: one that overlaps a running sequence is refused (the
    error names the item), so start it from an item outside that sequence or once it is done, and tell the user.
+   A board holds one pending request, so start several sequences one \`run\` at a time: when sessions may start
+   them, \`run\` waits until the office has started it; otherwise the user starts or dismisses each before you ask
+   for the next. Sequences started in the same worktree with the default --parallel 1 all edit that worktree at
+   once: when you start more than one, give each --parallel 2 (or more) so every step works in its own worktree and
+   is merged back when verified. Expect merge conflicts if two of them change the same lines.
    Sequences started by sessions also share a daily cap on the sessions they start (an office setting, across all
    boards): a run that reaches it stops, and the board says why. Each step's session starts in the permission mode
    the user picked on the board, so a step may wait at its terminal for a permission prompt.
+- **One item in a fresh session:** \`${T} run <id> --max 1\` hands just that item to a new session (a sequence of
+  one; without --max 1 it would go on to what waits on the item).
 - **If you were started by a sequence** (your prompt says "step N of up to M"), do your item only and end your turn;
   never start sequences or other items yourself (the CLI refuses anyway), and don't start \`wait\`: the office watches
-  the run. In a parallel run, commit your work on your branch before \`done\`: the office won't merge uncommitted work.
+  the run. Subagents for your own item are fine. In a parallel run, commit your work on your branch before \`done\`: the office won't merge uncommitted work.
 - A run stops for the user on anything but a clean, verified done (blocked, released, failed or unapproved check,
   merge conflict, session ended). If an item you depend on should change course, \`block\` it with why instead of
   letting the run go ahead.

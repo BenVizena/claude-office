@@ -33,7 +33,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { projectSlug, loadSettings } from '../server/config.js';
-import { requestRun } from '../server/chain.js';
+import { requestRun, runsOf } from '../server/chain.js';
 import { sessionRunPolicy } from '../server/runpolicy.js';
 import { setStatus, clearStatus, readStatus } from '../server/status.js';
 import {
@@ -96,6 +96,16 @@ function target() {
   if (p && /^[a-z0-9-]+$/.test(p) && !fs.existsSync(p)) return { slug: p, meta: null };
   const root = repoRoot(p || process.cwd());
   return { slug: projectSlug(root), meta: { name: path.basename(root), root } };
+}
+
+/** After a request the office may start: 'started' once it runs, 'gone' if it was dropped, 'pending' after ~15 s. */
+async function waitForStart(slug, root, ms = 15000) {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((res) => setTimeout(res, 500))) {
+    const b = readBoard(slug);
+    if (b.runRequest?.root === root) continue;
+    return runsOf(b).some((x) => x.root === root && !x.stopped) ? 'started' : 'gone';
+  }
+  return 'pending';
 }
 
 const MARK = { todo: '[ ]', doing: '[~]', done: '[x]', blocked: '[!]' };
@@ -429,7 +439,13 @@ ${d.text}`);
       if (policy.ask) {
         try { setStatus(session, { text: `Asked to run "${r.rootText}" in sequence`, needsYou: `Start the sequence on "${r.rootText}" (${items.length} items)? It's waiting on the board.` }); } catch { /* best effort */ }
         console.log('\nThe user approves it on the board (it shows there with Start / Dismiss). Board news tells you as items finish: run `wait` in the background if you want to hear.');
-      } else console.log('\nThe office starts it within a few seconds (the user lets sessions start sequences). Board news tells you as items finish.');
+      } else {
+        // the board holds one pending request, so wait until the office takes this one: asking again sooner would replace it
+        const started = await waitForStart(slug, r.root);
+        console.log(started === 'started' ? '\nThe office started it (the user lets sessions start sequences). Board news tells you as items finish.'
+          : started === 'gone' ? '\nThe office took the request but no sequence is running on it: board news or your status says why.'
+          : '\nThe office hasn\'t picked it up yet (is it running?). Ask for another sequence only once this one shows as started: a new request replaces this one until then.');
+      }
       break;
     }
     case 'depend': case 'undepend': {
