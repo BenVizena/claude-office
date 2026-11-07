@@ -151,10 +151,21 @@ export function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
 
+/**
+ * A Git Bash / MSYS / Cygwin style path (/c/Users/..., /cygdrive/c/...) as the Windows path it means (C:\Users\...).
+ * Transcripts record such a cwd after a session cds in Git Bash; path.resolve would read it as C:\c\Users\....
+ * Other paths, and every path off Windows, come back unchanged.
+ */
+export function nativePath(p, platform = process.platform) {
+  if (!p || platform !== 'win32') return p;
+  const m = /^\/(?:cygdrive\/|mnt\/)?([a-zA-Z])(?:\/(.*))?$/.exec(p);
+  return m ? `${m[1].toUpperCase()}:\\${(m[2] || '').replace(/\//g, '\\')}` : p;
+}
+
 /** Normalize a filesystem path for comparisons (case-insensitive on Windows, forward slashes). */
 export function normPath(p) {
   if (!p) return '';
-  let n = path.resolve(p).replace(/\\/g, '/').replace(/\/+$/, '');
+  let n = path.resolve(nativePath(p)).replace(/\\/g, '/').replace(/\/+$/, '');
   if (process.platform === 'win32') n = n.toLowerCase();
   return n;
 }

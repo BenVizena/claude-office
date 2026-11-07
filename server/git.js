@@ -2,6 +2,7 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
+import { OFFICE_DIR, normPath, nativePath, readJson, writeJsonAtomic } from './config.js';
 
 function git(cwd, args, timeout = 4000) {
   return new Promise((resolve) => {
@@ -12,10 +13,43 @@ function git(cwd, args, timeout = 4000) {
 }
 
 const rootCache = new Map(); // cwd -> { at, value }
+
+// Linked worktrees seen while they existed, so their sessions stay in the repo's room once the folder is gone (a
+// worktree made next to the main checkout, ~/workspace/repo-feature, has nothing in its path that names the repo).
+// normPath(worktree) -> { worktree, root }, kept in a small file so it survives restarts.
+const KNOWN_FILE = path.join(OFFICE_DIR, 'worktree-roots.json');
+const KNOWN_MAX = 500;
+let known = null;
+function knownMap() {
+  if (!known) known = new Map(Object.entries(readJson(KNOWN_FILE, {})));
+  return known;
+}
+function rememberWorktree(worktree, root) {
+  if (normPath(worktree) === normPath(root)) return;
+  const m = knownMap(), k = normPath(worktree), had = m.get(k);
+  if (had && normPath(had.root) === normPath(root)) return;
+  m.delete(k);
+  m.set(k, { worktree, root });
+  while (m.size > KNOWN_MAX) m.delete(m.keys().next().value); // oldest first
+  try { writeJsonAtomic(KNOWN_FILE, Object.fromEntries(m)); } catch { /* best effort */ }
+}
+/** The remembered worktree that `p` is in (or a folder under), or null. */
+function knownWorktreeOf(p) {
+  const m = knownMap();
+  for (let n = normPath(p); n; ) {
+    const hit = m.get(n);
+    if (hit) return hit;
+    const up = n.slice(0, n.lastIndexOf('/'));
+    if (up === n || !up.includes('/')) break;
+    n = up;
+  }
+  return null;
+}
 const repoCache = new Map(); // root -> { at, value }
 
 /** Resolve which repository (main root) a working directory belongs to. */
 export async function resolveRoot(cwd) {
+  cwd = nativePath(cwd);
   const hit = rootCache.get(cwd);
   if (hit && Date.now() - hit.at < 5 * 60000) return hit.value;
   let value = { root: cwd, worktree: cwd, isGit: false, exists: fs.existsSync(cwd) };
@@ -26,6 +60,7 @@ export async function resolveRoot(cwd) {
       const commonAbs = path.resolve(cwd, common);
       const root = path.basename(commonAbs) === '.git' ? path.dirname(commonAbs) : path.resolve(top);
       value = { root: path.resolve(root), worktree: path.resolve(top), isGit: true, exists: true };
+      rememberWorktree(value.worktree, value.root);
     }
   }
   // a worktree under <repo>/.claude/worktrees/ that has been removed (a merged sequence step, say) still belongs to
@@ -35,6 +70,9 @@ export async function resolveRoot(cwd) {
     const parent = await resolveRoot(nested.parent);
     if (parent.isGit) value = { root: parent.root, worktree: nested.worktree, isGit: true, exists: value.exists };
   }
+  // any other worktree that has since been removed (next to the main checkout, say): the repo it belonged to
+  const seen = !value.isGit && knownWorktreeOf(cwd);
+  if (seen && fs.existsSync(seen.root)) value = { root: path.resolve(seen.root), worktree: path.resolve(seen.worktree), isGit: true, exists: value.exists };
   rootCache.set(cwd, { at: Date.now(), value });
   return value;
 }
@@ -77,6 +115,7 @@ export async function repoInfo(root) {
     return { name, lastCommit: Number(t) * 1000, subject };
   });
   const live = worktrees.filter((w) => !w.bare && !w.prunable && fs.existsSync(w.path));
+  for (const w of live) rememberWorktree(w.path, root);
   await Promise.all(live.map(async (w) => {
     const [st, log, recent] = await Promise.all([
       git(w.path, ['status', '--porcelain']),

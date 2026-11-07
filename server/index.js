@@ -3,7 +3,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
-import { PORT, REPO_DIR, CATALOG_DIR, normPath, loadSettings, saveSettings, resolveBlender, syncHookCopy } from './config.js';
+import { PORT, REPO_DIR, CATALOG_DIR, normPath, nativePath, loadSettings, saveSettings, resolveBlender, syncHookCopy } from './config.js';
 import { SessionScanner } from './scanner.js';
 import { buildOffice } from './office.js';
 import { Catalog, DecorStore } from './decor.js';
@@ -119,7 +119,8 @@ const runSequences = makeRunner(
 let lastFull = 0;
 let lastSeq = 0;
 setInterval(() => {
-  if (Date.now() - lastSeq > 3000) { lastSeq = Date.now(); runSequences(); }
+  // not before the first office model is built: until then no room is known, so launches and requests would fail
+  if (state && Date.now() - lastSeq > 3000) { lastSeq = Date.now(); runSequences(); }
   if (scanner.scan()) dirty = true;
   // statuses depend on elapsed time, so refresh every few seconds regardless
   if (dirty || Date.now() - lastFull > 5000) { dirty = false; lastFull = Date.now(); rebuild(); }
@@ -179,14 +180,14 @@ const routes = {
     if (!b.session_id) return { ok: false };
     // the hook printed the news we gave it: it can leave the outbox
     if (b.ack !== undefined) { await whenUnlocked(() => ackNews(b.session_id, b.ack)); markDirty(); return { ok: true }; }
-    hooks.set(b.session_id, { event: b.hook_event_name, at: Date.now(), tool: b.tool_name, message: b.message, cwd: b.cwd });
+    hooks.set(b.session_id, { event: b.hook_event_name, at: Date.now(), tool: b.tool_name, message: b.message, cwd: nativePath(b.cwd) });
     if (['SessionStart', 'Stop', 'SessionEnd', 'UserPromptSubmit', 'Notification', 'PreCompact', 'PermissionRequest'].includes(b.hook_event_name)) {
       scanner.scan();
       broadcast({ type: 'event', event: b.hook_event_name, sessionId: b.session_id, message: b.message || null });
     }
     const ev = b.hook_event_name;
     // board news first: the hook gives up after 800 ms, and the claim update below may wait on a board's lock
-    const news = ev === 'SessionEnd' ? null : await boardNews(b.session_id, ev, b.cwd);
+    const news = ev === 'SessionEnd' ? null : await boardNews(b.session_id, ev, nativePath(b.cwd));
     // its news file stays for a resume; just note that it ended
     if (ev === 'SessionEnd') whenUnlocked(() => markNewsEnded(b.session_id)).catch((e) => console.error('news end failed:', e.message));
     // claims follow the session's life: ended -> anyone may take them over; back (resume) or started (a ▶ launch) ->
@@ -196,7 +197,7 @@ const routes = {
         .then((n) => { if (n) markDirty(); })
         .catch((e) => console.error('claim update failed:', e.message));
     }
-    if (ev === 'Stop' || ev === 'SessionEnd') setTimeout(runSequences, 500); // a sequence step may be able to move on
+    if (state && (ev === 'Stop' || ev === 'SessionEnd')) setTimeout(runSequences, 500); // a sequence step may be able to move on
     markDirty();
     return news ? { ok: true, context: news.context, upTo: news.upTo } : { ok: true };
   },

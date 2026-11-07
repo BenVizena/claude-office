@@ -2,7 +2,7 @@
 // and keeps a lightweight summary of every session.
 import fs from 'node:fs';
 import path from 'node:path';
-import { PROJECTS_DIR } from './config.js';
+import { PROJECTS_DIR, nativePath } from './config.js';
 import { costOf } from './pricing.js';
 
 const DAY = 86400000;
@@ -190,7 +190,7 @@ function textOf(content) {
 
 function ingest(s, o) {
   const ts = o.timestamp ? Date.parse(o.timestamp) : 0;
-  if (o.cwd) s.cwd = o.cwd;
+  if (o.cwd) s.cwd = nativePath(o.cwd); // a Git Bash cd records /c/Users/...: keep it the same folder
   if (o.gitBranch) s.gitBranch = o.gitBranch;
   if (o.entrypoint) s.entrypoint = o.entrypoint;
   if (o.version) s.version = o.version;
