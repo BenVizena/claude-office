@@ -50,6 +50,12 @@ const DEFAULT_SETTINGS = {
   // board) | 'allowed'. Sessions a sequence started can never start one, whatever this says.
   sessionRuns: 'ask',
   sessionRunDailyCap: 20,      // sessions that sequences started by sessions may launch in 24 h, across the office
+  // the --permission-mode for sessions the office starts (▶ and sequence steps): '' = none, so they get the user's own
+  // Claude Code default, like any session they open themselves. One of LAUNCH_PERMISSION_MODES in launch.js.
+  launchPermissionMode: '',
+  // run the check commands sessions set without the user approving each one (they still see them on the board).
+  // The office runs checks outside Claude Code's permission prompts, so this trusts every session's commands.
+  autoApproveChecks: false,
 };
 
 /** First existing file among candidates, else null. */

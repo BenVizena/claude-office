@@ -243,6 +243,9 @@ export function markSessionClaims(sessionId, ended) {
 // session can't use the board to run commands outside its own permission prompts.
 export const CHECK_MAX = 500;
 
+/** May the office run this check? Approved by the user, or any check while settings.autoApproveChecks is on. */
+export const checkCleared = (check, autoApprove = false) => !!check && (!!check.approved || !!autoApprove);
+
 /** cmd '' removes the check. approved: true only for the user's own edits (the office UI). Changing it resets approval. */
 export function setCheck(slug, id, { cmd, by = 'you', session, approved = false }) {
   const c = String(cmd ?? '').trim();

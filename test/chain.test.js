@@ -3,12 +3,13 @@ import { TEST_HOME } from './helpers/home.js';
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  readBoard, addItem, updateItem, claimItem, releaseItem, addDependency, readDetails, setCheck, approveCheck,
+  readBoard, addItem, updateItem, claimItem, releaseItem, addDependency, readDetails, setCheck, approveCheck, mutate,
 } from '../server/todos.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { scopeOf, nextItem, startRun, stopRun, tick, turnOver, requestRun, dropRequest, DEFAULT_STEPS } from '../server/chain.js';
+import { scopeOf, nextItem, startRun, stopRun, tick, turnOver, requestRun, dropRequest, DEFAULT_STEPS, MAX_RUNS, runsOf } from '../server/chain.js';
+const runOf = (slug) => runsOf(readBoard(slug))[0];
 import * as gitwork from '../server/gitwork.js';
 import { sessionRunPolicy, noteLaunch, launchesToday, RUN_ENV } from '../server/runpolicy.js';
 import { runCheck } from '../server/checks.js';
@@ -65,7 +66,7 @@ describe('running a sequence', () => {
     const o = office(s);
     startRun(s, { root: a.id, worktree: TEST_HOME });
     assert.throws(() => startRun(s, { root: a.id, worktree: TEST_HOME }), /already running/);
-    assert.equal(readBoard(s).run.max, DEFAULT_STEPS);
+    assert.equal(runOf(s).max, DEFAULT_STEPS);
 
     assert.equal(await tick(s, o.ctx), 'launched');
     assert.deepEqual(o.launched.map((x) => [x.id, x.step]), [[a.id, 1]]);
@@ -78,17 +79,17 @@ describe('running a sequence', () => {
     o.hooks.set('sess-1', { event: 'Stop', at: Date.now() + 1 });
     assert.equal(await tick(s, o.ctx), 'launched');
     assert.equal(o.launched[1].id, b.id);
-    assert.equal(readBoard(s).run.steps, 1);
+    assert.equal(runOf(s).steps, 1);
 
     o.finish(b.id);
     assert.equal(await tick(s, o.ctx), 'finished');
-    const run = readBoard(s).run;
+    const run = runOf(s);
     assert.equal(run.stopped.ok, true);
     assert.match(run.stopped.reason, /all 2 steps done/);
     assert.equal(o.notified.at(-1).needsYou, undefined, 'a clean finish does not ask for the user');
     assert.equal(await tick(s, o.ctx), 'idle');
     stopRun(s); // clears the finished run
-    assert.equal(readBoard(s).run, undefined);
+    assert.equal(runOf(s), undefined);
   });
 
   test('stops at the step cap', async () => {
@@ -100,7 +101,7 @@ describe('running a sequence', () => {
     await tick(s, o.ctx);
     o.finish(a.id);
     assert.equal(await tick(s, o.ctx), 'finished');
-    assert.match(readBoard(s).run.stopped.reason, /cap of 1 step; "two" is next/);
+    assert.match(runOf(s).stopped.reason, /cap of 1 step; "two" is next/);
     assert.equal(o.launched.length, 1);
   });
 
@@ -117,7 +118,7 @@ describe('running a sequence', () => {
       await tick(s, o.ctx);
       act(s, a.id);
       assert.equal(await tick(s, o.ctx), 'stopped');
-      assert.match(readBoard(s).run.stopped.reason, reason);
+      assert.match(runOf(s).stopped.reason, reason);
       assert.equal(o.notified.at(-1).session, 'sess-1');
       assert.ok(o.notified.at(-1).needsYou);
     });
@@ -165,8 +166,24 @@ describe('running a sequence', () => {
     await tick(s, o.ctx);
     o.finish(a.id);
     assert.equal(await tick(s, o.ctx), 'stopped');
-    assert.match(readBoard(s).run.stopped.reason, /nobody approved/);
+    assert.match(runOf(s).stopped.reason, /nobody approved/);
     assert.equal(o.checks.length, 0);
+  });
+
+  test("with checks allowed to run unapproved (office setting), a session's check runs and the run moves on", async () => {
+    const s = fresh();
+    const a = add(s, 'fix it'), b = add(s, 'then this');
+    addDependency(s, b.id, a.id, { by: 't' });
+    setCheck(s, a.id, { cmd: 'npm test', by: 'claude x', session: 'x' });
+    const o = office(s);
+    o.ctx.autoApproveChecks = () => true;
+    startRun(s, { root: a.id, worktree: TEST_HOME });
+    await tick(s, o.ctx);
+    o.finish(a.id);
+    assert.equal(await tick(s, o.ctx), 'launched');
+    assert.deepEqual(o.checks.map((c) => c.cmd), ['npm test']);
+    assert.match(runOf(s).log.map((l) => l.text).join('\n'), /checks run without approval/);
+    assert.equal(get(s, a.id).check.approved, false, 'the setting is not written into the check: turning it off protects it again');
   });
 
   test('stops when nothing in scope is ready', async () => {
@@ -176,7 +193,7 @@ describe('running a sequence', () => {
     const o = office(s);
     startRun(s, { root: a.id, worktree: TEST_HOME });
     assert.equal(await tick(s, o.ctx), 'stopped');
-    assert.match(readBoard(s).run.stopped.reason, /nothing left is ready.*claimed by busy/);
+    assert.match(runOf(s).stopped.reason, /nothing left is ready.*claimed by busy/);
   });
 
   test('a launch that fails stops the run', async () => {
@@ -186,8 +203,8 @@ describe('running a sequence', () => {
     o.ctx.launch = async () => { throw new Error('no terminal'); };
     startRun(s, { root: a.id, worktree: TEST_HOME });
     assert.equal(await tick(s, o.ctx), 'stopped');
-    assert.match(readBoard(s).run.stopped.reason, /could not start.*no terminal/);
-    assert.equal(readBoard(s).run.current, undefined);
+    assert.match(runOf(s).stopped.reason, /could not start.*no terminal/);
+    assert.equal(runOf(s).current, undefined);
   });
 
   test('stopping by hand leaves the session alone', async () => {
@@ -197,10 +214,10 @@ describe('running a sequence', () => {
     startRun(s, { root: a.id, worktree: TEST_HOME });
     await tick(s, o.ctx);
     stopRun(s); // first stop: nothing new starts, the running step may still finish
-    assert.equal(readBoard(s).run.stopping.reason, 'stopped by you');
+    assert.equal(runOf(s).stopping.reason, 'stopped by you');
     assert.equal(await tick(s, o.ctx), 'draining');
     stopRun(s); // second stop: right away
-    assert.match(readBoard(s).run.stopped.reason, /stopped by you/);
+    assert.match(runOf(s).stopped.reason, /stopped by you/);
     assert.equal(get(s, a.id).claim.session, 'sess-1');
     assert.equal(await tick(s, o.ctx), 'idle');
   });
@@ -215,7 +232,7 @@ describe('running a sequence', () => {
     stopRun(s);
     o.finish(a.id);
     assert.equal(await tick(s, o.ctx), 'stopped');
-    assert.equal(readBoard(s).run.stopped.reason, 'stopped by you');
+    assert.equal(runOf(s).stopped.reason, 'stopped by you');
     assert.equal(o.launched.length, 1, 'b never started');
   });
 });
@@ -240,7 +257,7 @@ function parallelOffice(slug, base) {
     return { session };
   };
   o.work = (id, file, text = `${id}\n`, { commit = true } = {}) => {
-    const step = readBoard(slug).run.active.find((x) => x.id === id);
+    const step = runOf(slug).active.find((x) => x.id === id);
     fs.writeFileSync(path.join(step.worktree, file), text);
     if (commit) { gitIn(step.worktree, 'add', '-A'); gitIn(step.worktree, 'commit', '-q', '-m', `work ${id}`); }
     o.finish(id);
@@ -260,7 +277,7 @@ describe('parallel runs', () => {
 
     assert.equal(await tick(s, o.ctx), 'launched');
     assert.deepEqual(o.launched.map((x) => x.id), [a.id], 'only A is ready');
-    const aStep = readBoard(s).run.active[0];
+    const aStep = runOf(s).active[0];
     assert.match(aStep.branch, new RegExp(`^office/${a.id}-`));
     assert.ok(fs.existsSync(path.join(aStep.worktree, 'base.txt')), 'its worktree starts from the base HEAD');
     assert.deepEqual(await gitwork.dirtyFiles(base), [], 'step worktrees stay out of the base status');
@@ -270,7 +287,7 @@ describe('parallel runs', () => {
     assert.ok(fs.existsSync(path.join(base, 'a.txt')), 'A was merged into the base');
     assert.ok(!fs.existsSync(aStep.worktree), 'and its worktree removed');
     assert.deepEqual(o.launched.slice(1).map((x) => x.id).sort(), [b.id, c.id].sort(), 'B and C start together');
-    const [bw, cw] = [b.id, c.id].map((id) => readBoard(s).run.active.find((x) => x.id === id).worktree);
+    const [bw, cw] = [b.id, c.id].map((id) => runOf(s).active.find((x) => x.id === id).worktree);
     assert.ok(fs.existsSync(path.join(bw, 'a.txt')) && fs.existsSync(path.join(cw, 'a.txt')), 'both start from the merged A');
 
     o.work(b.id, 'b.txt');
@@ -278,12 +295,12 @@ describe('parallel runs', () => {
     assert.equal(o.launched.length, 3, 'D still waits on C');
     o.work(c.id, 'c.txt');
     assert.equal(await tick(s, o.ctx), 'launched');
-    const dStep = readBoard(s).run.active.find((x) => x.id === d.id);
+    const dStep = runOf(s).active.find((x) => x.id === d.id);
     for (const f of ['a.txt', 'b.txt', 'c.txt']) assert.ok(fs.existsSync(path.join(dStep.worktree, f)), `D sees ${f}`);
 
     o.work(d.id, 'd.txt');
     assert.equal(await tick(s, o.ctx), 'finished');
-    assert.equal(readBoard(s).run.steps, 4);
+    assert.equal(runOf(s).steps, 4);
     assert.match(gitIn(base, 'log', '--oneline'), /Merge office\//);
     assert.equal(gitIn(base, 'worktree', 'list').split('\n').length, 1, 'no step worktrees left');
   });
@@ -302,7 +319,7 @@ describe('parallel runs', () => {
     o.work(a.id, 'same.txt', 'from A\n');
     o.work(b.id, 'same.txt', 'from B\n');
     assert.equal(await tick(s, o.ctx), 'stopped', 'both finished in the same round, so nothing is left to drain');
-    const run = readBoard(s).run;
+    const run = runOf(s);
     assert.match(run.stopped.reason, /merging "B" .*conflicted in same.txt/);
     assert.equal(get(s, a.id).status, 'done');
     assert.equal(get(s, b.id).status, 'doing');
@@ -337,7 +354,7 @@ describe('parallel runs', () => {
     const afterA = gitIn(base, 'rev-parse', 'HEAD');
     o.work(b.id, 'main.js', 'require("./lib").foo();\n'); // passes on its branch, where foo still exists
     assert.equal(await tick(s, o.ctx), 'stopped');
-    assert.match(readBoard(s).run.stopped.reason, /failed on the merged result.*merge was taken back/);
+    assert.match(runOf(s).stopped.reason, /failed on the merged result.*merge was taken back/);
     assert.equal(gitIn(base, 'rev-parse', 'HEAD'), afterA, 'the base is back where it was before B');
     assert.deepEqual(await gitwork.dirtyFiles(base), []);
     assert.equal(get(s, b.id).status, 'doing');
@@ -355,7 +372,7 @@ describe('parallel runs', () => {
     await tick(s, o.ctx);
     o.work(a.id, 'a.txt', 'x', { commit: false });
     assert.equal(await tick(s, o.ctx), 'stopped');
-    assert.match(readBoard(s).run.stopped.reason, /left uncommitted changes/);
+    assert.match(runOf(s).stopped.reason, /left uncommitted changes/);
     assert.equal(get(s, a.id).status, 'doing');
     assert.ok(!fs.existsSync(path.join(base, 'a.txt')));
   });
@@ -370,7 +387,7 @@ describe('parallel runs', () => {
     fs.writeFileSync(path.join(base, 'mine.txt'), 'the user is working here');
     o.work(a.id, 'a.txt');
     assert.equal(await tick(s, o.ctx), 'stopped');
-    assert.match(readBoard(s).run.stopped.reason, /has uncommitted changes/);
+    assert.match(runOf(s).stopped.reason, /has uncommitted changes/);
     assert.equal(get(s, a.id).status, 'doing', 'not done until merged, so nothing builds on it');
   });
 
@@ -390,7 +407,7 @@ describe('parallel runs', () => {
     o.work(o.launched[0].id, 'f1');
     o.work(o.launched[1].id, 'f2');
     assert.equal(await tick(s, o.ctx), 'finished');
-    assert.match(readBoard(s).run.stopped.reason, /cap of 2 steps/);
+    assert.match(runOf(s).stopped.reason, /cap of 2 steps/);
   });
 });
 
@@ -425,7 +442,7 @@ describe('requests and policy', () => {
     assert.equal(readBoard(s).runRequest.max, 2);
     startRun(s, { root: a.id, worktree: TEST_HOME, by: 'claude q (you approved)', bySession: 'q' });
     assert.equal(readBoard(s).runRequest, undefined);
-    assert.equal(readBoard(s).run.bySession, 'q');
+    assert.equal(runOf(s).bySession, 'q');
     assert.throws(() => requestRun(s, { root: a.id, worktree: TEST_HOME, by: 'claude q', bySession: 'q' }), /already running/);
     stopRun(s); stopRun(s);
     requestRun(s, { root: a.id, worktree: TEST_HOME, by: 'claude q', bySession: 'q' });
@@ -495,5 +512,64 @@ describe('step prompts', () => {
     const step = promptFor('b', 'x1', { n: 2, max: 4 });
     assert.doesNotMatch(step, /wait as a background command/);
     assert.match(step, /do not start `wait`/);
+  });
+});
+
+describe('launch permission mode', () => {
+  test('no flag by default; the chosen mode goes before the session id; unknown modes are refused', async () => {
+    const { launchArgs, LAUNCH_PERMISSION_MODES } = await import('../server/launch.js');
+    assert.deepEqual(launchArgs({ session: 's1', prompt: 'p' }), ['--session-id', 's1', 'p']);
+    assert.deepEqual(launchArgs({ session: 's1', prompt: 'p', permissionMode: 'auto' }), ['--permission-mode', 'auto', '--session-id', 's1', 'p']);
+    for (const m of LAUNCH_PERMISSION_MODES.filter(Boolean)) assert.equal(launchArgs({ session: 's', prompt: 'p', permissionMode: m })[1], m);
+    assert.throws(() => launchArgs({ session: 's', prompt: 'p', permissionMode: 'dontAsk' }), /unknown permission mode/);
+  });
+});
+
+describe('several sequences on a board', () => {
+  test('separate sequences run side by side; one sharing an open item is refused; at most MAX_RUNS', async () => {
+    const s = fresh();
+    const a = add(s, 'A'), a2 = add(s, 'A2'), b = add(s, 'B'), c = add(s, 'C');
+    addDependency(s, a2.id, a.id, { by: 't' });
+    const o = office(s);
+    const ra = startRun(s, { root: a.id, worktree: TEST_HOME });
+    const rb = startRun(s, { root: b.id, worktree: TEST_HOME });
+    assert.notEqual(ra.id, rb.id);
+    // A2 waits on A, so it is in A's sequence already
+    assert.throws(() => startRun(s, { root: a2.id, worktree: TEST_HOME }), /"A2" is already running in the sequence on "A"/);
+    assert.throws(() => requestRun(s, { root: a2.id, worktree: TEST_HOME, by: 'claude q', bySession: 'q' }), /already running/);
+
+    assert.deepEqual(await tick(s, o.ctx), ['launched', 'launched']);
+    assert.deepEqual(o.launched.map((x) => x.id).sort(), [a.id, b.id].sort());
+    o.finish(b.id);
+    assert.deepEqual(await tick(s, o.ctx), ['working', 'finished']);
+    assert.equal(runsOf(readBoard(s)).find((r) => r.id === rb.id).stopped.ok, true);
+
+    // stopping one by id leaves the other alone
+    stopRun(s, 'stopped by you', ra.id);
+    assert.equal(runsOf(readBoard(s)).find((r) => r.id === ra.id).stopping.reason, 'stopped by you');
+    assert.equal(runsOf(readBoard(s)).find((r) => r.id === rb.id).stopping, undefined);
+    // a sequence on C is fine: it shares nothing with A's
+    startRun(s, { root: c.id, worktree: TEST_HOME });
+  });
+
+  test('no more than MAX_RUNS at once, and steps are capped at 15', () => {
+    const s = fresh();
+    const items = Array.from({ length: MAX_RUNS + 1 }, (_, i) => add(s, `I${i}`));
+    for (const it of items.slice(0, MAX_RUNS)) startRun(s, { root: it.id, worktree: TEST_HOME, max: 99 });
+    assert.equal(runOf(s).max, 15);
+    assert.throws(() => startRun(s, { root: items.at(-1).id, worktree: TEST_HOME }), new RegExp(`${MAX_RUNS} sequences are already running`));
+    stopRun(s, 'stopped by you', runOf(s).id); // nothing running in it: stops at once, which frees a place
+    startRun(s, { root: items.at(-1).id, worktree: TEST_HOME });
+  });
+
+  test("a board saved by an older office (one board.run) keeps working", async () => {
+    const s = fresh();
+    const a = add(s, 'Old');
+    mutate(s, null, (b) => { b.run = { root: a.id, rootText: 'Old', worktree: TEST_HOME, max: 3, parallel: 1, launched: 0, steps: 0, by: 'you', startedAt: 1000, active: [], log: [] }; });
+    const o = office(s);
+    assert.equal(await tick(s, o.ctx), 'launched');
+    const runs = runsOf(readBoard(s));
+    assert.equal(runs.length, 1);
+    assert.equal(readBoard(s).run, undefined, 'moved over to board.runs');
   });
 });

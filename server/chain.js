@@ -17,15 +17,21 @@
 // session can ask for one (office-todo run), which the office starts, or asks the user about, as settings.sessionRuns
 // says (see runpolicy.js).
 //
-// board.run = { root, rootText, worktree, max, parallel, launched, steps, by, bySession?, startedAt, active: [step],
-//               log, lastSession?, stopping?: { reason, ok }, stopped?: { reason, at, ok } }
+// A board can have up to MAX_RUNS sequences going at once, as long as they don't share an open item (each would wait
+// on, or start, the other's items). Finished and stopped ones stay on the board until the user dismisses them.
+//
+// board.runs = [{ id, root, rootText, worktree, max, parallel, launched, steps, by, bySession?, startedAt,
+//               active: [step], log, lastSession?, stopping?: { reason, ok }, stopped?: { reason, at, ok } }]
+// (an office from before several runs kept a single one in board.run: runsOf moves it over)
 // step      = { id, text, session?, at, phase: launching|working|checking|merging|rechecking, worktree?, branch?, baseBranch? }
 // board.runRequest = { root, rootText, max, parallel, worktree, by, bySession, at }  (a session asked; see requestRun)
-import { readBoard, mutate, children, openBlockers, claimIsStale, updateItem, addDetail, recordCheck } from './todos.js';
+import { readBoard, mutate, children, openBlockers, claimIsStale, updateItem, addDetail, recordCheck, checkCleared } from './todos.js';
+import crypto from 'node:crypto';
 import { checkDir } from './checks.js';
 import { whenUnlocked } from './lock.js';
 
-export const MAX_STEPS = 20, DEFAULT_STEPS = 5, MAX_PARALLEL = 4;
+export const MAX_STEPS = 15, DEFAULT_STEPS = 5, MAX_PARALLEL = 4, MAX_RUNS = 5;
+const MAX_KEPT_STOPPED = 5; // finished or stopped runs kept on a board for the user to read
 const TURN_GRACE_MS = 60000;      // marked done while its session sat idle (e.g. by the user): don't wait for a Stop
 const NO_HOOKS_MS = 5 * 60000;    // no hook seen from it at all (office restarted?): assume its turn is over
 const STUCK_TURN_MS = 30 * 60000; // done, but no Stop for this long: assume its turn is over
@@ -61,16 +67,27 @@ export function readyItems(board, run) {
 }
 export const nextItem = (board, run) => readyItems(board, run)[0] || null;
 
+/** A board's sequences, oldest first. Moves an older office's single board.run over (pass a board being mutated to keep that). */
+export function runsOf(b) {
+  if (b.run) {
+    b.runs = [...(b.runs || []), { id: `r${(b.run.startedAt || 0).toString(36)}`, ...b.run }];
+    delete b.run;
+  }
+  return b.runs || [];
+}
+export const liveRuns = (b) => runsOf(b).filter((r) => !r.stopped);
+
 // every write is one locked write, retried while the CLI holds the board's lock (the server never blocks on it)
-function patchRun(slug, fn) {
+function patchRun(slug, runId, fn) {
   return whenUnlocked(() => mutate(slug, null, (b) => {
-    if (!b.run) return null;
-    b.run.active ||= [];
-    fn(b.run, b);
-    return { ...b.run };
+    const run = runsOf(b).find((r) => r.id === runId);
+    if (!run) return null;
+    run.active ||= [];
+    fn(run, b);
+    return { ...run };
   }));
 }
-const patchStep = (slug, id, fn) => patchRun(slug, (r) => { const s = r.active.find((x) => x.id === id); if (s) fn(s, r); });
+const patchStep = (slug, runId, id, fn) => patchRun(slug, runId, (r) => { const s = r.active.find((x) => x.id === id); if (s) fn(s, r); });
 
 const logLine = (run, text) => { run.log = [...(run.log || []), { at: Date.now(), text }].slice(-40); };
 const clampInt = (v, lo, hi, dflt) => Math.max(lo, Math.min(hi, Math.floor(Number(v)) || dflt));
@@ -79,26 +96,36 @@ function checkStartable(b, root) {
   const it = b.items.find((x) => x.id === root);
   if (!it) throw new Error('that item is no longer on the board');
   if (![...scopeOf(b, it.id)].some((id) => b.items.find((x) => x.id === id)?.status !== 'done')) throw new Error('everything in it is already done');
+  // another sequence could start these items, or wait on them, so two never share an open item
+  const live = liveRuns(b);
+  if (live.length >= MAX_RUNS) throw new Error(`${MAX_RUNS} sequences are already running on this board (the most at once): wait for one to finish, or stop one`);
+  const open = (root) => new Set([...scopeOf(b, root)].filter((id) => b.items.find((x) => x.id === id)?.status !== 'done'));
+  const mine = open(it.id);
+  for (const r of live) {
+    const shared = [...open(r.root)].find((id) => mine.has(id));
+    if (shared) throw new Error(`"${b.items.find((x) => x.id === shared).text}" is already running in the sequence on "${r.rootText}": start this once that one is done, or from an item outside it`);
+  }
   return it;
 }
 
-/** Start a run on an item. Throws if one is already going on this board. */
+/** Start a run on an item. Throws if the board has MAX_RUNS going, or one of them covers an open item of this one. */
 export function startRun(slug, { root, worktree, max = DEFAULT_STEPS, parallel = 1, by = 'you', bySession }) {
   const n = clampInt(max, 1, MAX_STEPS, DEFAULT_STEPS), p = clampInt(parallel, 1, MAX_PARALLEL, 1);
   return mutate(slug, null, (b) => {
-    if (b.run && !b.run.stopped) throw new Error('a sequence is already running on this board: stop it first');
     const it = checkStartable(b, root);
-    b.run = { root: it.id, rootText: it.text, worktree, max: n, parallel: p, launched: 0, steps: 0, by, ...(bySession ? { bySession } : {}), startedAt: Date.now(), active: [], log: [] };
-    logLine(b.run, `${by === 'you' ? 'you started it' : `${by} started it`} on "${it.text}" (up to ${n} step${n > 1 ? 's' : ''}${p > 1 ? `, ${p} at once, each in its own worktree` : ''})`);
-    delete b.runRequest;
-    return { ...b.run };
+    const run = { id: `r${crypto.randomBytes(3).toString('hex')}`, root: it.id, rootText: it.text, worktree, max: n, parallel: p, launched: 0, steps: 0, by, ...(bySession ? { bySession } : {}), startedAt: Date.now(), active: [], log: [] };
+    logLine(run, `${by === 'you' ? 'you started it' : `${by} started it`} on "${it.text}" (up to ${n} step${n > 1 ? 's' : ''}${p > 1 ? `, ${p} at once, each in its own worktree` : ''})`);
+    const stopped = runsOf(b).filter((r) => r.stopped);
+    const drop = new Set(stopped.slice(0, Math.max(0, stopped.length - (MAX_KEPT_STOPPED - 1))));
+    b.runs = [...runsOf(b).filter((r) => !drop.has(r)), run];
+    if (b.runRequest && (b.runRequest.root === it.id || (bySession && b.runRequest.bySession === bySession))) delete b.runRequest;
+    return { ...run };
   });
 }
 
 /** A session asks for a run (the office starts it or asks the user, per settings). One pending request per board. */
 export function requestRun(slug, { root, worktree, max = DEFAULT_STEPS, parallel = 1, by, bySession }) {
   return mutate(slug, null, (b) => {
-    if (b.run && !b.run.stopped) throw new Error('a sequence is already running on this board');
     if (b.runRequest && b.runRequest.bySession !== bySession) throw new Error(`${b.runRequest.by} already asked for one on this board; it waits for the user`);
     const it = checkStartable(b, root);
     b.runRequest = { root: it.id, rootText: it.text, worktree, max: clampInt(max, 1, MAX_STEPS, DEFAULT_STEPS), parallel: clampInt(parallel, 1, MAX_PARALLEL, 1), by, bySession, at: Date.now() };
@@ -111,14 +138,16 @@ export function dropRequest(slug) {
 }
 
 /**
- * Stop it. First stop: start nothing new, but finish (check and merge) the steps already running. A stop while
- * draining (or with nothing running) stops it right away; a stop on a stopped run clears it off the board.
+ * Stop a run (id; without one, the board's oldest running one, else its oldest stopped one). First stop: start nothing
+ * new, but finish (check and merge) the steps already running. A stop while draining (or with nothing running) stops it
+ * right away; a stop on a stopped run clears it off the board.
  */
-export function stopRun(slug, reason = 'stopped by you') {
+export function stopRun(slug, reason = 'stopped by you', id) {
   return mutate(slug, null, (b) => {
-    const r = b.run;
+    const runs = runsOf(b);
+    const r = id ? runs.find((x) => x.id === id) : (runs.find((x) => !x.stopped) || runs[0]);
     if (!r) return null;
-    if (r.stopped) { delete b.run; return null; }
+    if (r.stopped) { b.runs = runs.filter((x) => x !== r); if (!b.runs.length) delete b.runs; return null; }
     if (r.active?.length && !r.stopping) { r.stopping = { reason, ok: false }; logLine(r, `${reason}: nothing new starts; ${r.active.length} running step${r.active.length > 1 ? 's' : ''} finish first`); }
     else {
       r.stopped = { reason: r.stopping && reason === 'stopped by you' ? `${r.stopping.reason}; then stopped by you` : reason, at: Date.now(), ok: false };
@@ -158,8 +187,9 @@ async function processStep(slug, board, run, step, ctx, now) {
   if (it.status === 'done') {
     if (!turnOver(ctx.hookOf(step.session), it.completedAt || now, now)) return 'waiting';
     if (it.check) {
-      if (!it.check.approved) return { fail: `"${it.text}" has a check nobody approved yet (${it.check.cmd}): approve it in the office, then start again` };
-      await patchStep(slug, it.id, (s, r) => { s.phase = 'checking'; logLine(r, `checking "${it.text}": ${it.check.cmd}`); });
+      const auto = !it.check.approved && ctx.autoApproveChecks?.();
+      if (!checkCleared(it.check, auto)) return { fail: `"${it.text}" has a check nobody approved yet (${it.check.cmd}): approve it in the office, then start again` };
+      await patchStep(slug, run.id, it.id, (s, r) => { s.phase = 'checking'; logLine(r, `checking "${it.text}": ${it.check.cmd}${auto ? ' (set by a session; checks run without approval: office setting)' : ''}`); });
       const res = await ctx.runCheck(it.check.cmd, step.worktree || checkDir(board, it));
       try { await whenUnlocked(() => recordCheck(slug, it.id, res)); } catch { /* the item may have gone */ }
       if (!res.ok) {
@@ -170,7 +200,7 @@ async function processStep(slug, board, run, step, ctx, now) {
     }
     if (step.branch) {
       const g = ctx.git;
-      await patchStep(slug, it.id, (s) => { s.phase = 'merging'; });
+      await patchStep(slug, run.id, it.id, (s) => { s.phase = 'merging'; });
       const left = await g.dirtyFiles(step.worktree).catch((e) => [`(${e.message})`]);
       if (left.length) {
         await reopen(slug, it, `marked done with uncommitted changes in its worktree: commit them on ${step.branch}, then mark it done again`, { title: 'uncommitted changes in its worktree', text: left.join('\n') });
@@ -192,7 +222,7 @@ async function processStep(slug, board, run, step, ctx, now) {
       // Branches that each passed can still break each other once combined (one renames what another starts
       // calling, with no textual conflict): check the merged result too, before anything builds on it.
       if (it.check) {
-        await patchStep(slug, it.id, (s, r) => { s.phase = 'rechecking'; logLine(r, `checking the merged result in ${run.worktree}: ${it.check.cmd}`); });
+        await patchStep(slug, run.id, it.id, (s, r) => { s.phase = 'rechecking'; logLine(r, `checking the merged result in ${run.worktree}: ${it.check.cmd}`); });
         const res = await ctx.runCheck(it.check.cmd, run.worktree);
         try { await whenUnlocked(() => recordCheck(slug, it.id, res)); } catch { /* the item may have gone */ }
         if (!res.ok) {
@@ -204,7 +234,7 @@ async function processStep(slug, board, run, step, ctx, now) {
         }
       }
       const rm = await g.removeStepWorktree(run.worktree, step.worktree, step.branch);
-      await patchRun(slug, (r, b) => {
+      await patchRun(slug, run.id, (r, b) => {
         logLine(r, `merged ${step.branch} into ${step.baseBranch || 'the base'}${rm.ok ? '' : ` (${rm.error})`}`);
         if (rm.leftover) b.leftovers = [...new Set([...(b.leftovers || []), JSON.stringify([run.worktree, step.worktree])])];
       });
@@ -219,18 +249,28 @@ async function processStep(slug, board, run, step, ctx, now) {
 }
 
 /**
- * One round of the runner for one board. ctx: { hookOf(session), launch({ slug, id, worktree, step, max, run, git })
- * -> { session }, runCheck(cmd, cwd), git (gitwork.js), notify(session, { text, needsYou }), canLaunch?(run) -> reason|null,
- * now? }. Returns what it did (for tests and logs). Callers make sure two ticks for one board never overlap.
+ * One round of the runner for one board: each of its running sequences in turn. ctx: { hookOf(session),
+ * launch({ slug, id, worktree, step, max, run, git }) -> { session }, runCheck(cmd, cwd), git (gitwork.js),
+ * notify(session, { text, needsYou }), canLaunch?(run) -> reason|null, autoApproveChecks?() -> bool, now? }. Returns what it did (for tests and
+ * logs): 'idle' with none running, what the one did, or a list with several. Callers make sure two ticks for one board
+ * never overlap.
  */
 export async function tick(slug, ctx) {
+  const ids = liveRuns(readBoard(slug)).map((r) => r.id);
+  if (!ids.length) return 'idle';
+  const did = [];
+  for (const id of ids) did.push(await tickRun(slug, id, ctx));
+  return did.length === 1 ? did[0] : did;
+}
+
+async function tickRun(slug, rid, ctx) {
   const now = ctx.now ?? Date.now();
   let board = readBoard(slug);
-  let run = board.run;
+  let run = runsOf(board).find((r) => r.id === rid);
   if (!run || run.stopped) return 'idle';
-  if (run.current && !run.active) run = await patchRun(slug, (r) => { r.active = [r.current]; delete r.current; }); // older runs
+  if (run.current && !run.active) run = await patchRun(slug, rid, (r) => { r.active = [r.current]; delete r.current; }); // older runs
   const tell = (session, st) => { if (session) { try { ctx.notify?.(session, st); } catch { /* best effort */ } } };
-  const halt = (reason, ok = false) => patchRun(slug, (r) => {
+  const halt = (reason, ok = false) => patchRun(slug, rid, (r) => {
     if (!r.stopping) { r.stopping = { reason, ok }; logLine(r, reason); } else logLine(r, reason);
   });
 
@@ -240,10 +280,10 @@ export async function tick(slug, ctx) {
     const res = await processStep(slug, board, run, step, ctx, now);
     if (res === 'done') {
       const it = readBoard(slug).items.find((x) => x.id === step.id);
-      await patchRun(slug, (r) => { r.active = r.active.filter((s) => s.id !== step.id); r.steps++; r.lastSession = step.session; logLine(r, `done: "${step.text}"${it?.check ? ' (check passed)' : ''}`); });
+      await patchRun(slug, rid, (r) => { r.active = r.active.filter((s) => s.id !== step.id); r.steps++; r.lastSession = step.session; logLine(r, `done: "${step.text}"${it?.check ? ' (check passed)' : ''}`); });
       did = 'advanced';
     } else if (res?.fail) {
-      await patchRun(slug, (r) => {
+      await patchRun(slug, rid, (r) => {
         r.active = r.active.filter((s) => s.id !== step.id);
         if (step.worktree) logLine(r, `kept for you: worktree ${step.worktree}, branch ${step.branch}`);
       });
@@ -254,10 +294,10 @@ export async function tick(slug, ctx) {
   }
 
   board = readBoard(slug);
-  run = board.run;
+  run = runsOf(board).find((r) => r.id === rid);
   if (!run || run.stopped) return 'stopped';
   const finish = async (reason, ok) => {
-    await patchRun(slug, (r) => { if (r.stopping?.reason !== reason) logLine(r, reason); r.stopped = { reason, at: Date.now(), ok }; delete r.stopping; });
+    await patchRun(slug, rid, (r) => { if (r.stopping?.reason !== reason) logLine(r, reason); r.stopped = { reason, at: Date.now(), ok }; delete r.stopping; });
     if (!/stopped by you/.test(reason)) tell(run.lastSession, ok ? { text: `Sequence finished: ${reason}` } : { text: 'Sequence stopped', needsYou: reason });
     return ok ? 'finished' : 'stopped';
   };
@@ -284,19 +324,19 @@ export async function tick(slug, ctx) {
       return finish(refused, false);
     }
     // mark it first, so a crash mid-launch can't lead to a second session on another item
-    run = await patchRun(slug, (r) => { r.active.push({ id: next.id, text: next.text, at: Date.now(), phase: 'launching' }); r.launched++; });
+    run = await patchRun(slug, rid, (r) => { r.active.push({ id: next.id, text: next.text, at: Date.now(), phase: 'launching' }); r.launched++; });
     let wt = null;
     try {
       if (parallel > 1) wt = await ctx.git.createStepWorktree(run.worktree, next.id);
       const launched = await ctx.launch({ slug, id: next.id, worktree: wt?.worktree || run.worktree, step: run.launched, max: run.max, run, branch: wt });
-      run = await patchStep(slug, next.id, (s, r) => {
+      run = await patchStep(slug, rid, next.id, (s, r) => {
         Object.assign(s, { session: launched.session, at: Date.now(), phase: 'working' }, wt || {});
         logLine(r, `step ${r.launched}: started "${next.text}"${wt ? ` in ${wt.worktree} on ${wt.branch}` : ''}`);
       });
       did = 'launched';
     } catch (e) {
       if (wt) { try { await ctx.git.removeStepWorktree(run.worktree, wt.worktree, wt.branch); } catch { /* keep it */ } }
-      run = await patchRun(slug, (r) => { r.active = r.active.filter((s) => s.id !== next.id); r.launched--; });
+      run = await patchRun(slug, rid, (r) => { r.active = r.active.filter((s) => s.id !== next.id); r.launched--; });
       if (run.active.length) { await halt(`could not start a session on "${next.text}": ${e.message}`); return 'stopping'; }
       return finish(`could not start a session on "${next.text}": ${e.message}`, false);
     }
@@ -332,7 +372,7 @@ export function makeRunner(listBoardIds, ctx) {
         if (ctx.onRequest) await ctx.onRequest(slug);
         if (ctx.git) await sweepLeftovers(slug, ctx.git);
         return tick(slug, ctx);
-      })().then((r) => { if (r !== 'idle' && r !== 'working' && r !== 'waiting for its turn to end') ctx.changed?.(); })
+      })().then((r) => { if ([].concat(r).some((x) => x !== 'idle' && x !== 'working' && x !== 'waiting for its turn to end')) ctx.changed?.(); })
         .catch((e) => console.error(`sequence on ${slug}:`, e.message))
         .finally(() => busy.delete(slug));
     }

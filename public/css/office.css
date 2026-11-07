@@ -460,5 +460,6 @@ body.placing canvas { cursor: move !important; }
 .td-run .mono { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; overflow-wrap: anywhere; }
 .td-run-head label input { border: 1px solid var(--line); border-radius: 6px; padding: 1px 4px; }
 .td-run-head .primary { padding: 4px 12px; background: var(--ink); color: white; border: 0; }
-.td-policy { margin-top: 12px; }
+.td-policy { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.td-policy .td-warn { color: #b4501f; font-weight: 600; }
 .td-policy select { border: 1px solid var(--line); border-radius: 6px; background: white; font-size: 12px; }

@@ -8,15 +8,15 @@ import { SessionScanner } from './scanner.js';
 import { buildOffice } from './office.js';
 import { Catalog, DecorStore } from './decor.js';
 import { Staff } from './staff.js';
-import { addItem, updateItem, removeItem, claimItem, releaseItem, addDetail, readDetails, listBoards, moveItem, addDependency, removeDependency, markSessionClaims, setCheck, approveCheck, recordCheck, readBoard } from './todos.js';
+import { addItem, updateItem, removeItem, claimItem, releaseItem, addDetail, readDetails, listBoards, moveItem, addDependency, removeDependency, markSessionClaims, setCheck, approveCheck, recordCheck, readBoard, checkCleared } from './todos.js';
 import { runCheck, checkDir } from './checks.js';
-import { startRun, stopRun, makeRunner, dropRequest } from './chain.js';
+import { startRun, stopRun, makeRunner, dropRequest, runsOf, liveRuns, MAX_RUNS } from './chain.js';
 import * as gitwork from './gitwork.js';
 import { noteLaunch, launchesToday, sessionRunPolicy } from './runpolicy.js';
 import { setStatus } from './status.js';
 import { boardNews } from './nudges.js';
 import { ack as ackNews, markEnded as markNewsEnded, scanAll } from './news.js';
-import { startOnItem } from './launch.js';
+import { startOnItem, LAUNCH_PERMISSION_MODES } from './launch.js';
 import { computeUsage } from './usage.js';
 import { useNonBlockingLocks, whenUnlocked } from './lock.js';
 import { listRuns, runSummary, loadRun, imagePath, removeRun, IMAGE_TYPES } from './results.js';
@@ -43,11 +43,11 @@ async function rebuild() {
   try {
     state = await buildOffice({ scanner, settings, hooks, decor, catalog, staff });
     const boards = listBoards();
-    state.todoBoards = boards.map((bd) => ({ id: bd.id, name: bd.name, items: bd.items, run: bd.run || null, runRequest: bd.runRequest || null }));
+    state.todoBoards = boards.map((bd) => ({ id: bd.id, name: bd.name, items: bd.items, runs: runsOf(bd), maxRuns: MAX_RUNS, runRequest: bd.runRequest || null }));
     state.checksRunning = [...checksRunning];
     attachNews(state, boards);
     state.settings = { soundHint: true, showBackgroundSessions: settings.showBackgroundSessions, blender: !!resolveBlender(settings),
-      sessionRuns: settings.sessionRuns, sessionRunDailyCap: settings.sessionRunDailyCap };
+      sessionRuns: settings.sessionRuns, sessionRunDailyCap: settings.sessionRunDailyCap, launchPermissionMode: settings.launchPermissionMode || '', autoApproveChecks: !!settings.autoApproveChecks };
     broadcast({ type: 'state', state });
   } catch (e) {
     console.error('rebuild failed:', e);
@@ -93,11 +93,11 @@ async function handleRequest(slug) {
   }
 }
 const runSequences = makeRunner(
-  () => listBoards().filter((bd) => (bd.run && !bd.run.stopped) || bd.runRequest || bd.leftovers?.length).map((bd) => bd.id),
+  () => listBoards().filter((bd) => liveRuns(bd).length || bd.runRequest || bd.leftovers?.length).map((bd) => bd.id),
   {
     hookOf: (session) => hooks.get(session),
     launch: async ({ slug, id, worktree, step, max, run, branch }) => {
-      const r = await whenUnlocked(() => startOnItem({ room: findRoom(slug), id, worktree, claudePath: settings.claudePath, step: { n: step, max, branch } }));
+      const r = await whenUnlocked(() => startOnItem({ room: findRoom(slug), id, worktree, claudePath: settings.claudePath, permissionMode: settings.launchPermissionMode, step: { n: step, max, branch } }));
       await whenUnlocked(() => noteLaunch(r.session, { fromSession: !!run.bySession, board: slug, item: id })).catch((e) => console.error('run log:', e.message));
       return r;
     },
@@ -105,6 +105,7 @@ const runSequences = makeRunner(
     canLaunch: (run) => (run.bySession && launchesToday() >= settings.sessionRunDailyCap
       ? `sequences started by sessions reached today's cap of ${settings.sessionRunDailyCap} sessions (office setting)` : null),
     runCheck: (cmd, cwd) => runCheck(cmd, cwd),
+    autoApproveChecks: () => !!settings.autoApproveChecks,
     git: gitwork,
     notify,
     onRequest: (slug) => handleRequest(slug),
@@ -239,7 +240,7 @@ const routes = {
 
   // "Start a session on this": a new interactive claude in a terminal window, with the item claimed for it
   'POST /api/todos/start': async (b) => {
-    const r = await whenUnlocked(() => startOnItem({ room: findRoom(String(b.board)), id: String(b.id), worktree: String(b.worktree || ''), claudePath: settings.claudePath }));
+    const r = await whenUnlocked(() => startOnItem({ room: findRoom(String(b.board)), id: String(b.id), worktree: String(b.worktree || ''), claudePath: settings.claudePath, permissionMode: settings.launchPermissionMode }));
     markDirty();
     return r;
   },
@@ -250,7 +251,7 @@ const routes = {
     const board = readBoard(slug);
     const it = board.items.find((x) => x.id === b.id);
     if (!it?.check) throw new Error('that item has no check');
-    if (!it.check.approved) throw new Error('approve the check first');
+    if (!checkCleared(it.check, settings.autoApproveChecks)) throw new Error('approve the check first');
     if (checksRunning.has(key)) throw new Error('its check is already running');
     const cwd = checkDir(board, it);
     if (!cwd) throw new Error('no folder to run it in');
@@ -292,7 +293,7 @@ const routes = {
     markDirty();
     return { ok: true };
   },
-  'POST /api/todos/run/stop': async (b) => { const r = await whenUnlocked(() => stopRun(String(b.board))); markDirty(); return r || { ok: true }; },
+  'POST /api/todos/run/stop': async (b) => { const r = await whenUnlocked(() => stopRun(String(b.board), 'stopped by you', b.run ? String(b.run) : undefined)); markDirty(); return r || { ok: true }; },
 
   'POST /api/decorate': async (b) => {
     const room = findRoom(b.room);
@@ -360,6 +361,14 @@ const routes = {
     if (b.sessionRuns !== undefined) {
       if (!['off', 'ask', 'allowed'].includes(b.sessionRuns)) throw new Error('sessionRuns is off, ask or allowed');
       settings.sessionRuns = b.sessionRuns;
+    }
+    if (b.autoApproveChecks !== undefined) {
+      if (typeof b.autoApproveChecks !== 'boolean') throw new Error('autoApproveChecks is true or false');
+      settings.autoApproveChecks = b.autoApproveChecks;
+    }
+    if (b.launchPermissionMode !== undefined) {
+      if (!LAUNCH_PERMISSION_MODES.includes(b.launchPermissionMode)) throw new Error(`launchPermissionMode is one of: ${LAUNCH_PERMISSION_MODES.map((m) => m || '(none)').join(', ')}`);
+      settings.launchPermissionMode = b.launchPermissionMode;
     }
     if (b.sessionRunDailyCap !== undefined) settings.sessionRunDailyCap = Math.max(1, Math.min(200, Math.floor(Number(b.sessionRunDailyCap)) || 20));
     saveSettings(settings);

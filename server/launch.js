@@ -1,6 +1,6 @@
 // "Start a session on this": opens a terminal window running an interactive `claude` in one of the project's
 // worktrees, with a new session id that is claimed on the item before it starts. It is an ordinary session: the user
-// sees it, approves its permissions as usual and can talk to it. Nothing the user typed goes on the command line —
+// sees it, approves its permissions (in the mode settings.launchPermissionMode picks) and can talk to it. Nothing the user typed goes on the command line —
 // the prompt only names the item id and board, and the session reads the item itself with office-todo.
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -43,8 +43,18 @@ export function promptFor(board, id, step) {
       + `${step.branch.baseBranch} once its check passes, and refuses if anything is left uncommitted. Do not merge, rebase or push it yourself.` : '');
 }
 
+// Permission modes the office may start sessions in ('' passes no flag: the user's own Claude Code default applies).
+// 'dontAsk' and 'plan' are left out: a session that may not ask, or may not act, can't do a board item on its own.
+export const LAUNCH_PERMISSION_MODES = ['', 'manual', 'acceptEdits', 'auto', 'bypassPermissions'];
+
+/** The claude arguments for a launched session. */
+export function launchArgs({ session, prompt, permissionMode = '' }) {
+  if (!LAUNCH_PERMISSION_MODES.includes(permissionMode)) throw new Error(`unknown permission mode ${permissionMode}`);
+  return [...(permissionMode ? ['--permission-mode', permissionMode] : []), '--session-id', session, prompt];
+}
+
 /** Throws with a readable message when the item can't be started. Returns { session, worktree }. */
-export function startOnItem({ room, id, worktree, claudePath, step }) {
+export function startOnItem({ room, id, worktree, claudePath, step, permissionMode = '' }) {
   if (room?.kind !== 'project') throw new Error('sessions can only be started on a project board');
   // a parallel sequence step runs in a worktree the office just made inside one of the project's worktrees
   const inside = step?.branch && room.pods.some((p) => !p.removed && normPath(worktree).startsWith(`${normPath(p.path)}/`));
@@ -65,7 +75,7 @@ export function startOnItem({ room, id, worktree, claudePath, step }) {
   try { recordLaunch(room.key, id, { session, worktree: pod.path }); } catch { /* only used to pick where its check runs */ }
   try {
     const [cmd, pre] = claudeCommand(claudePath);
-    openTerminal({ cwd: pod.path, argv: [cmd, ...pre, '--session-id', session, promptFor(room.key, id, step)],
+    openTerminal({ cwd: pod.path, argv: [cmd, ...pre, ...launchArgs({ session, prompt: promptFor(room.key, id, step), permissionMode })],
       title: `Claude: ${room.name} ${id}${step ? ` (step ${step.n})` : ''}`, name: session, env: step ? { [RUN_ENV]: '1' } : {} });
   } catch (e) {
     releaseItem(room.key, id, { by: 'office' });

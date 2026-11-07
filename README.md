@@ -32,9 +32,13 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
   session sets one with `office-todo check <id> "..."`. The office only runs a check you approved (your own are
   approved as you type them; one a session set shows an *approve* button), so a well-behaved session can't use
   the board to run commands outside its own permission prompts (see the note on the API under *Sessions starting
-  sequences*). *run* on the item runs it now; its output goes into the background.
+  sequences*). Tick *run checks sessions set without asking me* at the top of a project board to drop that step:
+  then any session's check runs unapproved. *run* on the item runs it now; its output goes into the background.
+- **Permissions of ▶ sessions.** The settings strip at the top of a project board picks the permission mode the
+  office starts sessions in: your usual default (no flag), ask me, accept edits, auto, or never ask.
 - **Run in sequence.** In the ▶ dialog, tick *then keep going* to have the office work through the item, its
-  subtasks and everything that waits on them, one fresh session at a time, up to a cap (default 5). It starts the
+  subtasks and everything that waits on them, one fresh session at a time, up to a cap (default 5, at most 15). A
+  board runs up to 5 sequences at once, as long as no two share an open item. Each starts the
   next item only once the current one is done, its session's turn is over and its check passed. It stops and asks
   for you (✋ at that session's desk) if an item is blocked, released, reopened or taken over, its session ended,
   its check failed (the item goes back to in progress, with the output attached) or isn't approved. No Claude

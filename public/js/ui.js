@@ -4,7 +4,7 @@ import { ago, fmtTok } from './boards.js';
 import { ROLE_STYLE } from './character.js';
 import { overviewHtml } from './overview.js';
 import { bubbleFor } from './now-recent.js';
-import { sessionIndex, openTabHtml, completedTabHtml, sessionRunsHtml } from './todos-ui.js';
+import { sessionIndex, openTabHtml, completedTabHtml, boardSettingsHtml } from './todos-ui.js';
 import { treeTabHtml, treeDrag } from './todo-tree.js';
 import { newsText } from './news-text.js';
 
@@ -94,12 +94,17 @@ export class UI {
   render(first) {
     const state = this.getState();
     if (!state) return;
-    // keep what the user is typing
-    const keep = {};
+    // keep what the user is typing or has set: the body is rebuilt on every state update, every few seconds while
+    // sessions work, so anything not kept here jumps back to how the HTML draws it. data-keep: text, number, select,
+    // checkbox or <details> (open or not); data-keep-scroll: a box that scrolls on its own.
+    const keep = {}, scrolls = {};
     let focused = null;
     for (const el of this.body.querySelectorAll('[data-keep]')) {
-      keep[el.dataset.keep] = el.value;
+      keep[el.dataset.keep] = el.tagName === 'DETAILS' ? el.open : el.type === 'checkbox' ? el.checked : el.value;
       if (document.activeElement === el) focused = el.dataset.keep;
+    }
+    for (const el of this.body.querySelectorAll('[data-keep-scroll]')) {
+      if (el.scrollTop || el.scrollLeft) scrolls[el.dataset.keepScroll] = [el.scrollLeft, el.scrollTop];
     }
     const chat = $('.chat', this.body);
     const atBottom = chat ? chat.scrollHeight - chat.scrollTop - chat.clientHeight < 40 : true;
@@ -115,8 +120,25 @@ export class UI {
     const html = this.html(state, this.current);
     if (html == null) { this.close(); return; }
     this.body.innerHTML = html;
-    for (const [k, v] of Object.entries(keep)) { const el = $(`[data-keep="${k}"]`, this.body); if (el) el.value = v; }
-    if (focused) $(`[data-keep="${focused}"]`, this.body)?.focus();
+    for (const [k, val] of Object.entries(keep)) {
+      const el = $(`[data-keep="${CSS.escape(k)}"]`, this.body);
+      if (!el) continue;
+      if (el.tagName === 'DETAILS') el.open = val;
+      else if (el.type === 'checkbox') el.checked = val;
+      else if (el.tagName !== 'SELECT' || [...el.options].some((o) => o.value === val)) el.value = val;
+    }
+    // a done box just clicked: an update built before the click reached the server would untick it again
+    for (const [id, p] of this.pendingDone || []) {
+      const it = state.todoBoards?.find((b) => b.id === p.board)?.items.find((x) => x.id === id);
+      if (!it || (it.status === 'done') === p.checked || Date.now() - p.at > 8000) { this.pendingDone.delete(id); continue; }
+      const el = $(`[data-todo-done="${CSS.escape(id)}"]`, this.body);
+      if (el) el.checked = p.checked;
+    }
+    for (const [k, [x, y]] of Object.entries(scrolls)) {
+      const el = $(`[data-keep-scroll="${CSS.escape(k)}"]`, this.body);
+      if (el) [el.scrollLeft, el.scrollTop] = [x, y];
+    }
+    if (focused) $(`[data-keep="${CSS.escape(focused)}"]`, this.body)?.focus();
     if (!first) this.body.scrollTop = scrollTop;
     const tw2 = $('.tt-wrap', this.body);
     if (tw2 && treeScroll) [tw2.scrollLeft, tw2.scrollTop] = treeScroll;
@@ -251,7 +273,8 @@ export class UI {
     const tab = v.tab || 'open';
     // worktrees a "start a session on this" can open in (project boards only)
     v.checksRunning = new Set(state.checksRunning || []);
-    v.runActive = !!(board.run && !board.run.stopped);
+    v.runsFull = (board.runs || []).filter((r) => !r.stopped).length >= (board.maxRuns || 5);
+    v.autoChecks = !!state.settings?.autoApproveChecks;
     v.pods = !lobby && room.kind === 'project' ? room.pods.filter((p) => !p.removed).map(({ path, branch, detached, isMain, sessions: ss }) => ({ path, branch, detached, isMain, live: (ss || []).filter((s) => s.status !== 'gone').length })) : [];
     // refresh open background panels when agents add more
     for (const id of v.expanded || []) {
@@ -271,7 +294,7 @@ export class UI {
         <button role="tab" class="${tab === 'done' ? 'on' : ''}" data-tab="done">Completed · ${doneCount}</button>
       </div>
       ${tab === 'tree' ? treeTabHtml(board, v, sessions) : tab === 'open'
-        ? `<p class="sub">Agents use the <code>office-todo</code> skill to add subtasks, ✋ claim what they're working on, and attach 📎 background. Click an item to read it.</p>${openTabHtml(board, v, sessions)}${!lobby ? sessionRunsHtml(state.settings?.sessionRuns) : ''}`
+        ? `<p class="sub">Agents use the <code>office-todo</code> skill to add subtasks, ✋ claim what they're working on, and attach 📎 background. Click an item to read it.</p>${!lobby ? boardSettingsHtml(state.settings) : ''}${openTabHtml(board, v, sessions)}`
         : `${lobby ? `<p class="sub">${v.scope === 'board' ? 'Office-wide items only.' : 'Everything completed across all projects.'} <button class="td-link" data-scope="${v.scope === 'board' ? 'all' : 'board'}">${v.scope === 'board' ? 'Show all projects' : 'Only office-wide items'}</button></p>` : ''}
            ${completedTabHtml(doneBoards, v, sessions, lobby && v.scope !== 'board')}`}`;
   }
@@ -419,7 +442,7 @@ export class UI {
         if (confirm(`Let the office run this command in the project folder?\n\n${d.cmd}\n\nIt runs before anything that depends on this item starts in a sequence, and when you press "run".`)) await api('/api/todos', { board: v.board, action: 'approve-check', id: d.todoApproveCheck, cmd: d.cmd });
       }
       else if (d.todoRunCheck) await api('/api/todos/check/run', { board: v.board, id: d.todoRunCheck });
-      else if (d.todoRunStop) await api('/api/todos/run/stop', { board: v.board });
+      else if (d.todoRunStop) await api('/api/todos/run/stop', { board: v.board, run: d.todoRunStop });
       else if (d.todoReq) {
         await api('/api/todos/run/request', { board: v.board, action: d.todoReq,
           max: Number($('[data-req-max]', this.body)?.value) || undefined, parallel: Number($('[data-req-par]', this.body)?.value) || undefined });
@@ -529,7 +552,21 @@ export class UI {
     const v = this.current;
     const t = e.target;
     if (t.dataset.sessionRuns !== undefined) { try { await api('/api/settings', { sessionRuns: t.value }); } catch (err) { alert(err.message); } return; }
-    if (t.dataset.todoDone) await api('/api/todos', { board: v.board, action: 'update', id: t.dataset.todoDone, patch: { status: t.checked ? 'done' : 'todo' } });
+    if (t.dataset.autoChecks !== undefined) {
+      if (t.checked && !confirm('Run the check commands sessions set without asking you first? The office runs them in your project folder, outside Claude Code\'s permission prompts.')) { t.checked = false; return; }
+      try { await api('/api/settings', { autoApproveChecks: t.checked }); } catch (err) { alert(err.message); }
+      return;
+    }
+    if (t.dataset.launchMode !== undefined) {
+      if (t.value === 'bypassPermissions' && !confirm('Sessions the office starts will run every edit and command without asking you. Use this only in projects where that is safe. Continue?')) { this.render(false); return; }
+      try { await api('/api/settings', { launchPermissionMode: t.value }); } catch (err) { alert(err.message); }
+      return;
+    }
+    if (t.dataset.todoDone) {
+      const id = t.dataset.todoDone;
+      (this.pendingDone ||= new Map()).set(id, { board: v.board, checked: t.checked, at: Date.now() });
+      try { await api('/api/todos', { board: v.board, action: 'update', id, patch: { status: t.checked ? 'done' : 'todo' } }); } catch (err) { this.pendingDone.delete(id); this.render(false); alert(err.message); }
+    }
     if (t.dataset.ttShowdone !== undefined) { v.showDone = t.checked; this.render(false); return; }
     if (t.dataset.todoStatus) await api('/api/todos', { board: v.board, action: 'update', id: t.dataset.todoStatus, patch: { status: t.value } });
   }

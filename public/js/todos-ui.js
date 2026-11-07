@@ -69,17 +69,23 @@ function checkChip(it, board, v) {
   const c = it.check;
   if (!c) return '';
   const running = v.checksRunning?.has(`${board.id}:${it.id}`);
+  const cleared = c.approved || v.autoChecks;
   const last = c.last ? (c.last.ok ? `<span class="chip working" title="Passed ${ago(c.last.at)}">✓ passed</span>` : `<span class="chip needs_you" title="Failed ${ago(c.last.at)} (exit ${c.last.code ?? '?'}); the output is in its background">✗ failed</span>`) : '';
-  return `<span class="chip check ${c.approved ? '' : 'needs_you'}" title="${c.approved ? 'Runs before anything that depends on this starts in a sequence' : 'Set by a session. The office runs it only after you approve it.'}">🧪 <code>${esc(c.cmd)}</code></span>${last}
-    ${c.approved
+  const title = c.approved ? 'Runs before anything that depends on this starts in a sequence'
+    : cleared ? 'Set by a session. Runs without your approval (the "checks" setting at the top of the board).'
+      : 'Set by a session. The office runs it only after you approve it.';
+  return `<span class="chip check ${cleared ? '' : 'needs_you'}" title="${title}">🧪 <code>${esc(c.cmd)}</code></span>${last}
+    ${cleared
       ? (running ? '<span class="sub">running…</span>' : `<button class="td-link" data-todo-run-check="${it.id}" title="Run it now (in ${esc(it.launch?.worktree || 'the project folder')})">run</button>`)
       : `<button class="td-link" data-todo-approve-check="${it.id}" data-cmd="${esc(c.cmd)}" title="Let the office run this command">approve</button>`}`;
 }
 
-/** Banner for a sequence on this board: what it is doing, why it stopped, and its recent log. */
+/** Banners for the board's sequences: what each is doing, why it stopped, and its recent log. */
 export function runBannerHtml(board) {
-  const r = board.run;
-  if (!r) return '';
+  return (board.runs || []).map((r) => oneRunHtml(board, r)).join('');
+}
+
+function oneRunHtml(board, r) {
   const active = r.active || (r.current ? [r.current] : []);
   const phase = { launching: 'starting a session', working: 'working', checking: 'running its check', merging: 'merging its branch', rechecking: 'checking the merged result' };
   const stepLine = (st) => {
@@ -89,16 +95,16 @@ export function runBannerHtml(board) {
   };
   const who = r.bySession ? ` <span class="chip" title="A Claude session asked for this run">asked by ${esc(r.by)}</span>` : '';
   const head = r.stopped
-    ? `<b>${r.stopped.ok ? '✓ Sequence finished' : '✋ Sequence stopped'}</b> <span class="sub">${esc(r.stopped.reason)}</span>`
+    ? `<b>${r.stopped.ok ? '✓ Sequence finished' : '✋ Sequence stopped'}: “${esc(r.rootText || r.root)}”</b> <span class="sub">${esc(r.stopped.reason)}</span>`
     : r.stopping
-      ? `<b>⏸ Sequence stopping</b> <span class="sub">${esc(r.stopping.reason)}: nothing new starts; ${active.length} running step${active.length === 1 ? '' : 's'} finish${active.length === 1 ? 'es' : ''} first</span>`
+      ? `<b>⏸ Sequence stopping: “${esc(r.rootText || r.root)}”</b> <span class="sub">${esc(r.stopping.reason)}: nothing new starts; ${active.length} running step${active.length === 1 ? '' : 's'} finish${active.length === 1 ? 'es' : ''} first</span>`
       : `<b>▶▶ Sequence from “${esc(r.rootText || r.root)}”</b> <span class="sub">${r.launched ?? r.steps} of up to ${r.max} sessions started${(r.parallel || 1) > 1 ? `, up to ${r.parallel} at once` : ''} · ${r.steps} done</span>`;
   const stopTitle = r.stopped ? 'Clear this off the board' : r.stopping || !active.length ? 'Stop now (running sessions keep going; their worktrees are kept)' : "Don't start anything else; running steps are still checked and merged";
   return `<div class="td-run ${r.stopped ? (r.stopped.ok ? 'ok' : 'stopped') : r.stopping ? 'stopped' : 'running'}">
       <div class="td-run-head">${head}${who}<span class="spacer"></span>
-        <button class="${r.stopped ? 'ghost' : ''}" data-todo-run-stop="1" title="${stopTitle}">${r.stopped ? 'Dismiss' : r.stopping ? 'Stop now' : 'Stop'}</button></div>
+        <button class="${r.stopped ? 'ghost' : ''}" data-todo-run-stop="${esc(r.id || '')}" title="${stopTitle}">${r.stopped ? 'Dismiss' : r.stopping ? 'Stop now' : 'Stop'}</button></div>
       ${r.stopped ? '' : active.map(stepLine).join('')}
-      <details><summary class="sub">log</summary>${(r.log || []).slice().reverse().map((l) => `<div class="sub">${new Date(l.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} · ${esc(l.text)}</div>`).join('')}</details>
+      <details data-keep="run-log-${esc(r.id || '')}"><summary class="sub">log</summary>${(r.log || []).slice().reverse().map((l) => `<div class="sub">${new Date(l.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} · ${esc(l.text)}</div>`).join('')}</details>
     </div>`;
 }
 
@@ -116,16 +122,16 @@ export function runRequestHtml(board, v) {
     }
   }
   const items = board.items.filter((x) => scopeIds.has(x.id) && x.status !== 'done');
-  const unapproved = items.filter((x) => x.check && !x.check.approved);
+  const unapproved = v?.autoChecks ? [] : items.filter((x) => x.check && !x.check.approved);
   return `<div class="td-run request">
       <div class="td-run-head"><b>✋ ${esc(q.by)} asks to run a sequence</b><span class="sub">from “${esc(q.rootText)}” in <span class="mono">${esc(q.worktree)}</span></span></div>
-      ${items.map((x) => `<div class="sub">· ${esc(x.text)}${x.check ? ` <code>${esc(x.check.cmd)}</code>${x.check.approved ? '' : ' (check not approved)'}` : ''}</div>`).join('')}
+      ${items.map((x) => `<div class="sub">· ${esc(x.text)}${x.check ? ` <code>${esc(x.check.cmd)}</code>${x.check.approved || v?.autoChecks ? '' : ' (check not approved)'}` : ''}</div>`).join('')}
       ${live ? `<div class="sub">⚠ ${live} live session${live === 1 ? ' works' : 's work'} in that worktree (the one asking, most likely). With more than 1 at once, merges change files under ${live === 1 ? 'it' : 'them'} and their uncommitted edits stop the run: a worktree nobody works in is the safer base.</div>` : ''}
       ${unapproved.length ? `<div class="sub">It stops at ${unapproved.length === 1 ? 'the item' : 'items'} with an unapproved check until you approve ${unapproved.length === 1 ? 'it' : 'them'}.</div>` : ''}
       <div class="td-run-head">
-        <label class="sub">up to <input type="number" data-req-max value="${q.max}" min="1" max="20" style="width:3.5em" /> sessions,</label>
+        <label class="sub">up to <input type="number" data-req-max data-keep="req-max-${esc(q.root)}" value="${q.max}" min="1" max="15" style="width:3.5em" /> sessions,</label>
         <label class="sub" title="More than 1: each item gets its own worktree and branch, merged into ${esc(q.worktree)} when it is done and verified">
-          <input type="number" data-req-par value="${q.parallel || 1}" min="1" max="4" style="width:3em" /> at once</label>
+          <input type="number" data-req-par data-keep="req-par-${esc(q.root)}" value="${q.parallel || 1}" min="1" max="4" style="width:3em" /> at once</label>
         <span class="spacer"></span>
         <button class="ghost" data-todo-req="dismiss">Dismiss</button>
         <button class="primary" data-todo-req="start">Start</button>
@@ -133,11 +139,27 @@ export function runRequestHtml(board, v) {
     </div>`;
 }
 
-/** Who may start sequences: the office-wide setting, shown under the board. */
-export function sessionRunsHtml(mode) {
-  const opts = { off: 'only me', ask: 'sessions may ask (I approve)', allowed: 'sessions may start them' };
-  return `<div class="td-policy sub" title="Sessions started by a sequence can never start one. Sequences started by sessions share a daily cap on sessions.">
-      Sequences: <select data-session-runs>${Object.entries(opts).map(([k, l]) => `<option value="${k}" ${k === (mode || 'ask') ? 'selected' : ''}>${l}</option>`).join('')}</select>
+// what each launch permission mode means, for the settings strip ('' = no flag: the user's own default)
+const LAUNCH_MODES = {
+  '': ['my usual default', 'No --permission-mode flag: they start in your own Claude Code default, like a session you open yourself'],
+  manual: ['ask me', 'They ask before edits and commands, so a sequence waits at its terminal until you answer'],
+  acceptEdits: ['accept edits', 'File edits go ahead; commands not on your allow list still ask'],
+  auto: ['auto', 'Claude Code decides what needs asking and lets routine work through'],
+  bypassPermissions: ['never ask (risky)', 'Nothing asks: every edit and command runs unchecked. Only for projects you can afford to lose work in'],
+};
+
+/** Office-wide settings for sessions the office starts, shown at the top of a project board. */
+export function boardSettingsHtml(settings = {}) {
+  const runs = { off: 'only me', ask: 'sessions may ask (I approve)', allowed: 'sessions may start them' };
+  const mode = settings.launchPermissionMode || '';
+  return `<div class="td-policy sub">
+      <label title="Sessions started by a sequence can never start one. Sequences started by sessions share a daily cap on sessions.">Sequences:
+        <select data-session-runs>${Object.entries(runs).map(([k, l]) => `<option value="${k}" ${k === (settings.sessionRuns || 'ask') ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label title="${Object.values(LAUNCH_MODES).map(([l, d]) => esc(`${l}: ${d}`)).join('&#10;')}">▶ sessions' permissions:
+        <select data-launch-mode>${Object.entries(LAUNCH_MODES).map(([k, [l]]) => `<option value="${k}" ${k === mode ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <span class="${mode === 'bypassPermissions' ? 'td-warn' : ''}">${esc((LAUNCH_MODES[mode] || LAUNCH_MODES[''])[1])}</span>
+      <label title="A check is a command that proves an item is done (npm test, say). The office runs it before anything that depends on the item starts in a sequence, outside Claude Code's permission prompts. Your own checks never need approval.">
+        <input type="checkbox" data-auto-checks ${settings.autoApproveChecks ? 'checked' : ''} /> run checks sessions set without asking me</label>
     </div>`;
 }
 
@@ -148,13 +170,13 @@ function startRow(it, v, depth) {
   return `<div class="td-subadd td-start" style="--depth:${depth + 1}">
       <span class="sub">Start a Claude session on this in</span>
       ${pods.length > 1
-        ? `<select data-start-wt="${it.id}">${pods.map((p) => `<option value="${esc(p.path)}">${esc(label(p))}</option>`).join('')}</select>`
+        ? `<select data-start-wt="${it.id}" data-keep="start-wt-${it.id}">${pods.map((p) => `<option value="${esc(p.path)}">${esc(label(p))}</option>`).join('')}</select>`
         : `<span class="mono" data-start-wt="${it.id}" data-value="${esc(pods[0].path)}">${esc(label(pods[0]))}</span>`}
-      <span class="sub">It opens in a terminal window with the item claimed; you approve its permissions there as usual.</span>
-      ${v.runActive ? '<span class="sub">(A sequence is already running on this board.)</span>' : `<label class="sub" title="When this is done, verified and its session's turn is over, the office starts the next ready item that waits on it (or its next subtask) in a new session. It stops on anything else: blocked, released, a failed or unapproved check, or the cap.">
-        <input type="checkbox" data-start-seq="${it.id}" /> then keep going: start what waits on it, one at a time, up to
-        <input type="number" data-start-max="${it.id}" value="5" min="1" max="20" style="width:3.5em" /> sessions,
-        <input type="number" data-start-par="${it.id}" value="1" min="1" max="4" style="width:3em" title="More than 1 runs items that don't wait on each other side by side, each in its own worktree and branch, merged into this worktree when done and verified (it must be on a branch and have no uncommitted changes when merging)" /> at once</label>
+      <span class="sub">It opens in a terminal window with the item claimed; any permission prompts show up there (the permissions setting at the top of the board picks how many).</span>
+      ${v.runsFull ? '<span class="sub">(This board already has as many sequences running as it can: wait for one to finish to start another.)</span>' : `<label class="sub" title="When this is done, verified and its session's turn is over, the office starts the next ready item that waits on it (or its next subtask) in a new session. It stops on anything else: blocked, released, a failed or unapproved check, or the cap.">
+        <input type="checkbox" data-start-seq="${it.id}" data-keep="start-seq-${it.id}" /> then keep going: start what waits on it, one at a time, up to
+        <input type="number" data-start-max="${it.id}" data-keep="start-max-${it.id}" value="5" min="1" max="15" style="width:3.5em" /> sessions,
+        <input type="number" data-start-par="${it.id}" data-keep="start-par-${it.id}" value="1" min="1" max="4" style="width:3em" title="More than 1 runs items that don't wait on each other side by side, each in its own worktree and branch, merged into this worktree when done and verified (it must be on a branch and have no uncommitted changes when merging)" /> at once</label>
       <span class="sub">More than 1 at once merges finished items into this worktree: pick one nobody works in (a separate integration worktree is safest), since files change under a session there and uncommitted edits there stop the run.</span>`}
       <button class="ghost" data-todo-start-cancel="${it.id}">Cancel</button>
       <button class="primary" data-todo-start-go="${it.id}">Start</button>
@@ -168,7 +190,7 @@ function editRow(it, depth) {
         <input type="text" data-keep="edit-summary-${it.id}" data-edit-for="${it.id}" data-field="summary" value="${esc(it.summary || '')}" maxlength="200" placeholder="One-line summary for context (optional)" />
         <input type="text" data-keep="edit-check-${it.id}" data-edit-for="${it.id}" data-field="check" value="${esc(it.check?.cmd || '')}" maxlength="500" placeholder="Check command that proves it is done, e.g. npm test (optional)" class="mono" />
         <div class="td-edit-row">
-          <label class="sub">Priority <select data-edit-for="${it.id}" data-field="priority">${['low', 'normal', 'high'].map((p) => `<option value="${p}" ${p === (it.priority || 'normal') ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
+          <label class="sub">Priority <select data-edit-for="${it.id}" data-field="priority" data-keep="edit-priority-${it.id}">${['low', 'normal', 'high'].map((p) => `<option value="${p}" ${p === (it.priority || 'normal') ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
           <span class="spacer"></span>
           <button class="ghost" data-todo-cancel="${it.id}">Cancel</button>
           <button class="primary" data-todo-save="${it.id}">Save</button>
@@ -181,11 +203,11 @@ function detailsHtml(it, v, sessions, depth, boardId) {
   const entries = v.details?.[it.id]?.entries;
   const body = !entries ? '<div class="sub">Loading…</div>'
     : !entries.length ? '<div class="sub">No background yet. Agents add it with <code>office-todo context</code>; you can add a note below.</div>'
-      : entries.map((e) => `
+      : entries.map((e, i) => `
         <div class="bg-entry ${e.kind}">
           <div class="bg-head"><span class="bg-kind">${{ explanation: '💡', log: '📜', code: '⌨️', note: '🗒️' }[e.kind] || '•'} ${esc(e.title || e.kind)}</span>
             <span class="sub">${esc(who(e, sessions))} · ${ago(e.at)}${e.lang ? ` · ${esc(e.lang)}` : ''}</span></div>
-          ${e.kind === 'log' || e.kind === 'code' ? `<pre>${esc(e.text)}</pre>` : `<div class="bg-text">${esc(e.text)}</div>`}
+          ${e.kind === 'log' || e.kind === 'code' ? `<pre data-keep-scroll="bg-${it.id}-${i}">${esc(e.text)}</pre>` : `<div class="bg-text">${esc(e.text)}</div>`}
         </div>`).join('');
   return `<div class="td-details" style="--depth:${depth}">
       <div class="sub">Added by ${esc(who({ by: it.by, session: it.bySession }, sessions))} ${ago(it.createdAt)}${it.claim ? ` · claimed ${ago(it.claim.at)}` : ''}${it.completedAt ? ` · done ${ago(it.completedAt)}` : ''}</div>

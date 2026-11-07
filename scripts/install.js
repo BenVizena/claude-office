@@ -86,7 +86,7 @@ ${T} add "Short imperative task" [--parent <id>] [--priority low|normal|high] [-
 ${T} edit <id> [--text "better title"] [--priority low|normal|high] [--summary "..." | --summary ""]
 ${T} move <id> --parent <id>        # nest an existing item under another (or --root); keeps id + background
 ${T} depend <id> --on <other>        # <id> can't start until <other> is done (auto blocked/unblocked)
-${T} check <id> "npm test"          # a command that proves it is done (or --clear); the user approves it in the office
+${T} check <id> "npm test"          # a command that proves it is done (or --clear); the user approves it in the office (unless they let checks run unapproved)
 ${T} undepend <id> --on <other>      # drop that dependency
 ${T} context <id> "why / what I found" [--title "..."]          # explanation
 ${T} context <id> --kind log --title "failing test" --file out.txt   # a log (or --file - to pipe)
@@ -131,7 +131,8 @@ machine-readable output, \`--by "<short label>"\` to describe yourself (e.g. "cl
   their id, claim and background, and breaks references to them).
 - **Checks prove done.** If \`show\` lists a check for your item, run it and only mark the item done once it passes.
   When you add items whose success a command can show (tests pass, the build works), set one with \`check\` (keep it
-  fast and specific). The office runs it only after the user approves it.
+  fast and specific). The office runs it only after the user approves it, unless their office setting lets checks run
+  without approval (\`show\` and \`check\` say which).
 - **Hand off before done.** If other items wait on yours (\`show\` lists them under "needed by"), leave each a short
   \`context\` note with what its session would otherwise have to rediscover: what changed, where things are, decisions
   and why. If one shouldn't go ahead as written any more, \`block\` it with the reason. In a sequence run from the
@@ -164,15 +165,21 @@ waiting.
 2. **Link them.** Give the chain one root item (the first step, or a parent you add the steps under) and
    \`depend\` each step on the steps it builds on. Steps that don't build on each other may share a dependency (a
    fan-out: they can run side by side); a step that needs several earlier ones depends on all of them (a join).
-3. **Add checks** where a command can show a step worked (\`check <id> "npm test"\`): fast and specific. The user has to
-   approve checks a session sets, and a run stops at an unapproved one, so mention them to the user.
+3. **Add checks** where a command can show a step worked (\`check <id> "npm test"\`): fast and specific. Unless the
+   user lets checks run without approval (\`check\` says so), they approve checks a session sets, and a run stops at
+   an unapproved one, so mention them to the user.
 4. **Run it:** \`${T} run <root id> [--max N] [--parallel N]\`. It covers the root, its subtasks and everything that waits
-   on them. --max caps how many sessions it starts (default 5, at most 20); keep it to the number of items unless the
+   on them. --max caps how many sessions it starts (default 5, at most 15); keep it to the number of items unless the
    user says otherwise. --parallel N (at most 4) runs up to N independent items at once, each in its own git worktree
    and branch made from your current worktree and merged back into it when done and verified; use it only for
    fan-outs whose steps don't touch the same files, and only when your worktree is committed and on a branch.
    Depending on the user's office setting, the office starts it right away, asks the user (it waits on the board with
-   Start / Dismiss), or refuses: say which to the user. Board news tells you as items finish.
+   Start / Dismiss), or refuses: say which to the user. Board news tells you as items finish. A board runs up to 5
+   sequences at once, as long as no two share an open item: one that overlaps a running sequence is refused (the
+   error names the item), so start it from an item outside that sequence or once it is done, and tell the user.
+   Sequences started by sessions also share a daily cap on the sessions they start (an office setting, across all
+   boards): a run that reaches it stops, and the board says why. Each step's session starts in the permission mode
+   the user picked on the board, so a step may wait at its terminal for a permission prompt.
 - **If you were started by a sequence** (your prompt says "step N of up to M"), do your item only and end your turn;
   never start sequences or other items yourself (the CLI refuses anyway), and don't start \`wait\`: the office watches
   the run. In a parallel run, commit your work on your branch before \`done\`: the office won't merge uncommitted work.

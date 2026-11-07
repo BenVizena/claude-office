@@ -99,13 +99,17 @@ function target() {
 }
 
 const MARK = { todo: '[ ]', doing: '[~]', done: '[x]', blocked: '[!]' };
+// the user may let the office run checks sessions set without approving each (settings.autoApproveChecks)
+let autoChecks;
+const checksAuto = () => (autoChecks ??= (() => { try { return !!loadSettings().autoApproveChecks; } catch { return false; } })());
+const unapprovedNote = (check, text) => (check.approved || checksAuto() ? '' : text);
 function line(it, board, indent = '') {
   const kids = children(board, it.id);
   const prog = kids.length ? ` (${kids.filter((k) => k.status === 'done').length}/${kids.length} subtasks)` : '';
   const pri = it.priority && it.priority !== 'normal' ? ` [${it.priority}]` : '';
   const claim = it.claim ? `  ← claimed by ${it.claim.session === session && session ? 'you' : it.claim.by}${it.claim.ended ? ' (session ended — free to take over)' : it.claim.pending ? (claimIsStale(it.claim) ? ' (its session never started — free to take over)' : ' (session starting…)') : ''}` : '';
   const note = (it.summary ? `\n${indent}      ${it.summary}` : '') + (it.note ? `\n${indent}      note: ${it.note}` : '')
-    + (it.check ? `\n${indent}      check: ${it.check.cmd}${it.check.approved ? '' : ' (not approved by the user yet)'}${it.check.last ? ` — last run ${it.check.last.ok ? 'passed' : 'FAILED'}` : ''}` : '');
+    + (it.check ? `\n${indent}      check: ${it.check.cmd}${unapprovedNote(it.check, ' (not approved by the user yet)')}${it.check.last ? ` — last run ${it.check.last.ok ? 'passed' : 'FAILED'}` : ''}` : '');
   const waits = board.items?.length ? openBlockers(board, it) : [];
   const dep = waits.length ? `  ⛔ waits on ${waits.map((w) => w.id).join(', ')}` : '';
   return `${indent}${MARK[it.status] || '[?]'} ${it.id}  ${it.text}${pri}${prog}${claim}${dep}${note}`;
@@ -397,12 +401,12 @@ ${d.text}`);
       if (!cmdText && !flags.clear) {
         const it = readBoard(slug).items.find((x) => x.id === id || x.id.startsWith(id));
         if (!it) throw new Error(`no item ${id}`);
-        console.log(it.check ? `${it.check.cmd}${it.check.approved ? '' : '  (not approved by the user yet)'}` : 'no check (set one: office-todo check <id> "npm test")');
+        console.log(it.check ? `${it.check.cmd}${unapprovedNote(it.check, '  (not approved by the user yet)')}` : 'no check (set one: office-todo check <id> "npm test")');
         break;
       }
       const r = setCheck(slug, id, { cmd: cmdText, by, session });
       console.log(r.check
-        ? `check for "${r.text}": ${r.check.cmd}\nRun it yourself before \`done\`. The office only runs it (before starting what depends on this) once the user approves it in the office.`
+        ? `check for "${r.text}": ${r.check.cmd}\nRun it yourself before \`done\`. ${checksAuto() ? 'The office runs it too, before starting what depends on this (the user lets checks run without approval).' : 'The office only runs it (before starting what depends on this) once the user approves it in the office.'}`
         : `"${r.text}" has no check now`);
       break;
     }
@@ -419,7 +423,7 @@ ${d.text}`);
       console.log(`sequence on "${r.rootText}": ${items.length} open item${items.length === 1 ? '' : 's'} in scope, up to ${r.max} session${r.max > 1 ? 's' : ''}`
         + `${r.parallel > 1 ? `, ${r.parallel} at once (each in its own worktree and branch, merged into this worktree)` : ', one at a time'}, in ${here}`);
       console.log(tree(b, items));
-      const unchecked = items.filter((i) => !i.check?.approved);
+      const unchecked = checksAuto() ? [] : items.filter((i) => !i.check?.approved);
       if (unchecked.some((i) => i.check)) console.log(`\nnote: ${unchecked.filter((i) => i.check).map((i) => i.id).join(', ')} have checks the user hasn't approved: the run stops there until they do.`);
       if (r.parallel > 1) console.log(`\nnote: finished items are merged into ${here}, the worktree you are in: files there change under you while it runs, and uncommitted edits there stop the run. Don't edit files there meanwhile; tell the user a worktree nobody works in is the safer base.`);
       if (policy.ask) {
