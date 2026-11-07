@@ -211,15 +211,19 @@ function editRow(it, depth) {
 }
 
 function detailsHtml(it, v, sessions, depth, boardId) {
-  const entries = v.details?.[it.id]?.entries;
-  const body = !entries ? '<div class="sub">Loading…</div>'
-    : !entries.length ? '<div class="sub">No background yet. Agents add it with <code>office-todo context</code>; you can add a note below.</div>'
-      : entries.map((e, i) => `
+  const every = v.details?.[it.id]?.entries;
+  const entries = every?.filter((e) => !e.retired);
+  const retired = every?.filter((e) => e.retired) || [];
+  const entryHtml = (e) => `
         <div class="bg-entry ${e.kind}">
           <div class="bg-head"><span class="bg-kind">${{ explanation: '💡', log: '📜', code: '⌨️', note: '🗒️' }[e.kind] || '•'} ${esc(e.title || e.kind)}</span>
-            <span class="sub">${esc(who(e, sessions))} · ${ago(e.at)}${e.lang ? ` · ${esc(e.lang)}` : ''}</span></div>
-          ${e.kind === 'log' || e.kind === 'code' ? `<pre data-keep-scroll="bg-${it.id}-${i}">${esc(e.text)}</pre>` : `<div class="bg-text">${esc(e.text)}</div>`}
-        </div>`).join('');
+            <span class="sub">#${e.n} · ${esc(who(e, sessions))} · ${ago(e.at)}${e.lang ? ` · ${esc(e.lang)}` : ''}${e.replaces ? ` · replaces #${e.replaces}` : ''}</span></div>
+          ${e.retired ? `<div class="sub">Retired ${e.retired.replacedBy ? `(replaced by #${e.retired.replacedBy}) ` : ''}by ${esc(who(e.retired, sessions))} ${ago(e.retired.at)}${e.retired.why ? `: ${esc(e.retired.why)}` : ''}</div>` : ''}
+          ${e.kind === 'log' || e.kind === 'code' ? `<pre data-keep-scroll="bg-${it.id}-${e.n}">${esc(e.text)}</pre>` : `<div class="bg-text">${esc(e.text)}</div>`}
+        </div>`;
+  const body = !entries ? '<div class="sub">Loading…</div>'
+    : (!entries.length ? '<div class="sub">No background yet. Agents add it with <code>office-todo context</code>; you can add a note below.</div>' : entries.map(entryHtml).join(''))
+      + (retired.length ? `<details data-keep="bg-retired-${it.id}"><summary class="sub">${retired.length} retired (out of date, kept for the record)</summary>${retired.map(entryHtml).join('')}</details>` : '');
   return `<div class="td-details" style="--depth:${depth}">
       <div class="sub">${idChip(it.id)} Added by ${esc(who({ by: it.by, session: it.bySession }, sessions))} ${ago(it.createdAt)}${it.claim ? ` · claimed ${ago(it.claim.at)}` : ''}${it.completedAt ? ` · done ${ago(it.completedAt)}` : ''}</div>
       ${body}

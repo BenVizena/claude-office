@@ -92,6 +92,8 @@ ${T} chain <a> <b> <c> [--replace]    # set an order in one go: each waits on th
 ${T} context <id> "why / what I found" [--title "..."]          # explanation
 ${T} context <id> --kind log --title "failing test" --file out.txt   # a log (or --file - to pipe)
 ${T} context <id> --kind code --lang ts --title "the fix" --file - < snippet.ts
+${T} context <id> --replaces <n> "corrected note"   # supersede stale entry #n (show numbers them; the old one is kept, hidden)
+${T} context <id> --retire <n> "why it no longer holds"   # retire a stale entry without adding one
 ${T} done <id>                     # finished and verified
 ${T} release <id>                  # giving it up unfinished
 ${T} block <id> "why it's blocked"
@@ -143,6 +145,10 @@ When a write starts a new board for your directory, the CLI says so: if that was
   \`context\` note with what its session would otherwise have to rediscover: what changed, where things are, decisions
   and why. If one shouldn't go ahead as written any more, \`block\` it with the reason. In a sequence run from the
   board, the next session starts from your note.
+- **Keep background current.** When an entry you read (yours or another session's) no longer holds — the step it
+  asks for was done elsewhere, a plan changed, a line number moved — don't append a contradicting note: write the
+  correction with \`context <id> --replaces <n> "..."\`, or \`context <id> --retire <n> "why"\` if nothing replaces
+  it. Retired entries stay in the history (\`show <id> --all\`); nothing is ever deleted.
 - **Titles are short and imperative; the summary is one line of context** (why it matters / where it stands) that
   the user sees under the title (over 200 characters it is shortened and the full text kept as background). Fix unclear titles, stale summaries or wrong priorities with \`edit\`.
 - **Leave background only when it helps the user understand** — the root cause you found, the key error log,

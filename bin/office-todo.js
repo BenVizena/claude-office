@@ -8,7 +8,9 @@
 //   start <id>                        alias for claim
 //   context <id> ["text"] [--kind explanation|log|code] [--title "..."] [--lang js] [--file path | -]
 //                                     attach background info the user can read in the office (only when useful)
-//   show <id>                         an item with its subtasks and background
+//           [--replaces <n>]          ...in place of entry #n, which is retired (kept in the history, hidden by default)
+//   context <id> --retire <n> ["why"] retire a stale entry without adding one
+//   show <id> [--all]                 an item with its subtasks and background (--all: retired entries too)
 //   status "what I'm doing" [--mood 🤔] [--needs-you "question for the user"]   your speech bubble in the office
 //   status --clear | status            clear / show it
 //   move <id> --parent <id> | --root   re-parent an existing item (keeps its id, claim and background)
@@ -41,7 +43,7 @@ import { requestRun, runsOf } from '../server/chain.js';
 import { sessionRunPolicy } from '../server/runpolicy.js';
 import { setStatus, clearStatus, readStatus } from '../server/status.js';
 import {
-  readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, moveItem, addDependency, removeDependency, setChain, openBlockers, claimIsStale, dependents, setCheck,
+  readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, retireDetail, liveDetails, moveItem, addDependency, removeDependency, setChain, openBlockers, claimIsStale, dependents, setCheck,
 } from '../server/todos.js';
 import { subscribe, unsubscribe, scan, markShown, subCount, watcherBeat, WATCHER_BEAT_MS } from '../server/news.js';
 import {
@@ -411,12 +413,20 @@ try {
     case 'wait': await waitForNews(); break;
     case 'context': {
       need();
+      const entryNo = (v, usage) => { if (!/^#?\d+$/.test(String(v ?? ''))) throw new Error(usage); return Number(String(v).replace('#', '')); };
+      if (flags.retire !== undefined) {
+        const n = entryNo(flags.retire, 'usage: office-todo context <id> --retire <entry number> ["why"]  (show lists the numbers)');
+        const r = retireDetail(slug, id, n, { by, session, why: rest.slice(1).join(' ') });
+        console.log(`retired background #${r.retiredEntry} of "${r.text}" — kept in its history (show ${r.id} --all), hidden otherwise (${r.details} live entr${r.details === 1 ? 'y' : 'ies'})`);
+        break;
+      }
+      const replaces = flags.replaces === undefined ? undefined : entryNo(flags.replaces, '--replaces takes an entry number (show lists them)');
       let text = rest.slice(1).join(' ');
       if (flags.file === '-') text = fs.readFileSync(0, 'utf8');
       else if (flags.file) text = fs.readFileSync(flags.file, 'utf8');
       const kind = flags.kind || (flags.lang ? 'code' : 'explanation');
-      const r = addDetail(slug, id, { by, session, kind, title: flags.title, lang: flags.lang, text });
-      console.log(`added ${kind} to "${r.text}" on board ${slug} (${r.details} background entr${r.details === 1 ? 'y' : 'ies'})${r.truncated ? ' — it was long, so the middle was trimmed' : ''}`);
+      const r = addDetail(slug, id, { by, session, kind, title: flags.title, lang: flags.lang, text, replaces });
+      console.log(`added ${kind} #${r.n} to "${r.text}" on board ${slug}${r.replaced ? ` in place of #${r.replaced} (retired, kept in its history)` : ''} (${r.details} background entr${r.details === 1 ? 'y' : 'ies'})${r.truncated ? ' — it was long, so the middle was trimmed' : ''}`);
       break;
     }
     case 'show': {
@@ -424,14 +434,18 @@ try {
       const b = readBoard(slug);
       const it = b.items.find((x) => x.id === id) || b.items.find((x) => x.id.startsWith(id));
       if (!it) throw new Error(`no item ${id} on board ${slug}`);
-      const det = readDetails(slug, it.id);
+      const all = readDetails(slug, it.id);
+      const det = flags.all ? all : liveDetails(all);
+      const hidden = all.length - det.length;
       const next = dependents(b, it);
-      if (flags.json) { print({ ...it, subtasks: children(b, it.id), neededBy: next.map((x) => x.id), background: det }); break; }
+      if (flags.json) { print({ ...it, subtasks: children(b, it.id), neededBy: next.map((x) => x.id), background: det, ...(hidden ? { retiredHidden: hidden } : {}) }); break; }
       console.log(tree(b, [it, ...b.items.filter((x) => { for (let p = x; p?.parent; p = b.items.find((q) => q.id === p.parent)) if (p.parent === it.id) return true; return false; })]));
       if (next.length) console.log(`\nneeded by (these wait on it): ${next.map((x) => `${x.id} "${x.text}"`).join(', ')}`);
       for (const d of det) console.log(`
---- ${d.kind}${d.title ? `: ${d.title}` : ''} (${d.by}, ${new Date(d.at).toLocaleString()})
+--- #${d.n} ${d.kind}${d.title ? `: ${d.title}` : ''} (${d.by}, ${new Date(d.at).toLocaleString()})${d.replaces ? ` — replaces #${d.replaces}` : ''}${d.retired ? `  [RETIRED${d.retired.replacedBy ? `, replaced by #${d.retired.replacedBy}` : ''}${d.retired.why ? `: ${d.retired.why}` : ''} — ${d.retired.by}, ${new Date(d.retired.at).toLocaleString()}]` : ''}
 ${d.text}`);
+      if (hidden) console.log(`\n(${hidden} retired background entr${hidden === 1 ? 'y' : 'ies'} hidden: show ${it.id} --all)`);
+      if (det.some((d) => !d.retired)) console.log(`\n(an entry is stale or wrong? \`context ${it.id} --replaces <#> "..."\` or \`context ${it.id} --retire <#> "why"\`)`);
       break;
     }
     case 'move': {
