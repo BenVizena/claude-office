@@ -90,9 +90,10 @@ export function treeTabHtml(board, v, sessions) {
     const waits = (it.blockedBy || []).map((d) => byId.get(d)).filter((x) => x && x.status !== 'done');
     const claim = it.claim && (it.claim.session && sessions.get(it.claim.session)?.title || it.claim.by);
     return `<div class="tt-card ${it.status}${it.priority === 'high' ? ' high' : ''}" data-tt-card="${it.id}" style="left:${p.x}px;top:${p.y}px;width:${CW}px;height:${CH}px"
-        title="${esc(it.text)}${it.summary ? `\n${esc(it.summary)}` : ''}">
+        title="${esc(it.id)} · ${esc(it.text)}${it.summary ? `\n${esc(it.summary)}` : ''}">
         <div class="tt-text">${it.priority === 'high' ? '🔥 ' : ''}${it.status === 'done' ? '✓ ' : ''}${esc(it.text)}</div>
         <div class="tt-meta">
+          <span class="tt-id mono">${esc(it.id)}</span>
           ${waits.length ? `<span class="tt-wait" title="Waiting on: ${esc(waits.map((w) => w.text).join(', '))}">⛔ ${waits.length}</span>` : ''}
           ${it.status === 'doing' ? '<span class="tt-st">in progress</span>' : it.status === 'blocked' ? '<span class="tt-st blocked">blocked</span>' : ''}
           ${claim ? `<span class="tt-claim${it.claim.ended ? ' ended' : ''}" title="Claimed ${ago(it.claim.at)}${it.claim.ended ? `; that session ended ${ago(it.claim.ended)}, so any session can take it over` : ''}">${it.claim.ended ? '🔓' : '🔒'} ${esc(claim)}</span>` : ''}

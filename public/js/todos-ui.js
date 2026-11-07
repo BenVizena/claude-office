@@ -2,6 +2,8 @@
 import { ago } from './boards.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+/** Small muted id chip; clicking it copies the id (sessions, handovers and commits refer to items by id). */
+export const idChip = (id) => `<button class="td-id mono" data-copy-id="${esc(id)}" title="Item id: click to copy">${esc(id)}</button>`;
 const STATUS = { todo: 'to do', doing: 'in progress', blocked: 'blocked', done: 'done' };
 
 /** sessionId -> { title, status } across the office, for showing who claimed what. */
@@ -37,6 +39,7 @@ function itemRow(it, board, v, sessions, depth) {
         <div class="td-text" data-todo-toggle="${it.id}">${it.priority === 'high' ? '<span class="pri high" title="High priority">🔥</span> ' : ''}${esc(it.text)}${it.priority === 'low' ? ' <span class="pri low">low</span>' : ''}</div>
         ${it.summary ? `<div class="td-summary">${esc(it.summary)}</div>` : ''}
         <div class="td-meta">
+          ${idChip(it.id)}
           ${it.status !== 'todo' && it.status !== 'done' ? `<span class="chip ${it.status === 'blocked' ? 'needs_you' : 'working'}">${STATUS[it.status]}</span>` : ''}
           ${(it.blockedBy || []).map((d) => board.items.find((x) => x.id === d)).filter((x) => x && x.status !== 'done')
             .map((x) => `<span class="chip needs_you" title="Can't start until this is done">⛔ waits on ${esc(x.text.length > 40 ? `${x.text.slice(0, 40)}…` : x.text)}</span>`).join('')}
@@ -91,14 +94,14 @@ function oneRunHtml(board, r) {
   const stepLine = (st) => {
     const it = board.items.find((x) => x.id === st.id);
     const waiting = it?.status === 'done' && st.phase === 'working';
-    return `<div class="sub">· “${esc(st.text)}”: ${waiting ? 'done, waiting for its session to finish its turn' : phase[st.phase] || st.phase}${st.branch ? ` <span class="mono" title="${esc(st.worktree)}">${esc(st.branch)}</span>` : ''}</div>`;
+    return `<div class="sub">· ${idChip(st.id)} “${esc(st.text)}”: ${waiting ? 'done, waiting for its session to finish its turn' : phase[st.phase] || st.phase}${st.branch ? ` <span class="mono" title="${esc(st.worktree)}">${esc(st.branch)}</span>` : ''}</div>`;
   };
   const who = r.bySession ? ` <span class="chip" title="A Claude session asked for this run">asked by ${esc(r.by)}</span>` : '';
   const head = r.stopped
-    ? `<b>${r.stopped.ok ? '✓ Sequence finished' : '✋ Sequence stopped'}: “${esc(r.rootText || r.root)}”</b> <span class="sub">${esc(r.stopped.reason)}</span>`
+    ? `<b>${r.stopped.ok ? '✓ Sequence finished' : '✋ Sequence stopped'}: “${esc(r.rootText || r.root)}”</b> ${idChip(r.root)} <span class="sub">${esc(r.stopped.reason)}</span>`
     : r.stopping
-      ? `<b>⏸ Sequence stopping: “${esc(r.rootText || r.root)}”</b> <span class="sub">${esc(r.stopping.reason)}: nothing new starts; ${active.length} running step${active.length === 1 ? '' : 's'} finish${active.length === 1 ? 'es' : ''} first</span>`
-      : `<b>▶▶ Sequence from “${esc(r.rootText || r.root)}”</b> <span class="sub">${r.launched ?? r.steps} of up to ${r.max} sessions started${(r.parallel || 1) > 1 ? `, up to ${r.parallel} at once` : ''} · ${r.steps} done</span>`;
+      ? `<b>⏸ Sequence stopping: “${esc(r.rootText || r.root)}”</b> ${idChip(r.root)} <span class="sub">${esc(r.stopping.reason)}: nothing new starts; ${active.length} running step${active.length === 1 ? '' : 's'} finish${active.length === 1 ? 'es' : ''} first</span>`
+      : `<b>▶▶ Sequence from “${esc(r.rootText || r.root)}”</b> ${idChip(r.root)} <span class="sub">${r.launched ?? r.steps} of up to ${r.max} sessions started${(r.parallel || 1) > 1 ? `, up to ${r.parallel} at once` : ''} · ${r.steps} done</span>`;
   const stopTitle = r.stopped ? 'Clear this off the board' : r.stopping || !active.length ? 'Stop now (running sessions keep going; their worktrees are kept)' : "Don't start anything else; running steps are still checked and merged";
   return `<div class="td-run ${r.stopped ? (r.stopped.ok ? 'ok' : 'stopped') : r.stopping ? 'stopped' : 'running'}">
       <div class="td-run-head">${head}${who}<span class="spacer"></span>
@@ -125,7 +128,7 @@ export function runRequestHtml(board, v) {
   const unapproved = v?.autoChecks ? [] : items.filter((x) => x.check && !x.check.approved);
   return `<div class="td-run request">
       <div class="td-run-head"><b>✋ ${esc(q.by)} asks to run a sequence</b><span class="sub">from “${esc(q.rootText)}” in <span class="mono">${esc(q.worktree)}</span></span></div>
-      ${items.map((x) => `<div class="sub">· ${esc(x.text)}${x.check ? ` <code>${esc(x.check.cmd)}</code>${x.check.approved || v?.autoChecks ? '' : ' (check not approved)'}` : ''}</div>`).join('')}
+      ${items.map((x) => `<div class="sub">· ${idChip(x.id)} ${esc(x.text)}${x.check ? ` <code>${esc(x.check.cmd)}</code>${x.check.approved || v?.autoChecks ? '' : ' (check not approved)'}` : ''}</div>`).join('')}
       ${live ? `<div class="sub">⚠ ${live} live session${live === 1 ? ' works' : 's work'} in that worktree (the one asking, most likely). With more than 1 at once, merges change files under ${live === 1 ? 'it' : 'them'} and their uncommitted edits stop the run: a worktree nobody works in is the safer base.</div>` : ''}
       ${unapproved.length ? `<div class="sub">It stops at ${unapproved.length === 1 ? 'the item' : 'items'} with an unapproved check until you approve ${unapproved.length === 1 ? 'it' : 'them'}.</div>` : ''}
       <div class="td-run-head">
@@ -210,7 +213,7 @@ function detailsHtml(it, v, sessions, depth, boardId) {
           ${e.kind === 'log' || e.kind === 'code' ? `<pre data-keep-scroll="bg-${it.id}-${i}">${esc(e.text)}</pre>` : `<div class="bg-text">${esc(e.text)}</div>`}
         </div>`).join('');
   return `<div class="td-details" style="--depth:${depth}">
-      <div class="sub">Added by ${esc(who({ by: it.by, session: it.bySession }, sessions))} ${ago(it.createdAt)}${it.claim ? ` · claimed ${ago(it.claim.at)}` : ''}${it.completedAt ? ` · done ${ago(it.completedAt)}` : ''}</div>
+      <div class="sub">${idChip(it.id)} Added by ${esc(who({ by: it.by, session: it.bySession }, sessions))} ${ago(it.createdAt)}${it.claim ? ` · claimed ${ago(it.claim.at)}` : ''}${it.completedAt ? ` · done ${ago(it.completedAt)}` : ''}</div>
       ${body}
       <div class="add-row"><input type="text" data-keep="note-${it.id}" data-note-for="${it.id}" data-board="${boardId}" placeholder="Add a note…" /><button data-todo-note="${it.id}" data-board="${boardId}">Add</button></div>
     </div>`;
@@ -276,6 +279,7 @@ export function completedTabHtml(boards, v, sessions, showProject) {
             <div class="td-text" data-todo-toggle="${it.id}" data-board="${b.id}">✓ ${esc(it.text)}</div>
             ${it.summary ? `<div class="td-summary">${esc(it.summary)}</div>` : ''}
             <div class="td-meta">
+              ${idChip(it.id)}
               ${showProject ? `<span class="chip">${esc(b.name || b.id)}</span>` : ''}
               ${parent ? `<span class="sub">↳ part of “${esc(parent.text)}”</span>` : ''}
               <span class="sub">by ${esc(who({ by: it.completedBy, session: it.completedSession }, sessions))}</span>
