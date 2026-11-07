@@ -495,6 +495,15 @@ export class UI {
   }
 
   async onClick(e) {
+    const cid = e.target.closest('[data-copy-id]');
+    if (cid) { // item id chip: copy it, flash "copied", then show the id again
+      e.preventDefault(); e.stopPropagation();
+      const id = cid.dataset.copyId;
+      try { await navigator.clipboard.writeText(id); cid.textContent = 'copied'; } catch { cid.textContent = 'copy failed'; }
+      cid.classList.add('copied');
+      setTimeout(() => { cid.textContent = id; cid.classList.remove('copied'); }, 1000);
+      return;
+    }
     const res = e.target.closest('[data-open-results]');
     if (res) {
       dispatchEvent(new CustomEvent('office:open-results', { detail: { board: res.dataset.openResults, session: res.dataset.session || null, run: res.dataset.run || null } }));
