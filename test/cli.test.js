@@ -75,6 +75,15 @@ describe('office-todo board commands', () => {
     assert.match(ok(b('rm', a.id)), /removed "First" and 1 subtask/);
   });
 
+  test('chain sets an order in one call', () => {
+    const [x, y, z] = ['Chain one', 'Chain two', 'Chain three'].map((t) => json(b('add', t)));
+    const out = ok(b('chain', x.id, y.id, z.id));
+    assert.match(out, new RegExp(`order: ${x.id} → ${y.id} → ${z.id}`));
+    assert.match(ok(b('chain', z.id, x.id, y.id, '--replace')), new RegExp(`dropped: ${z.id} no longer waits on ${y.id}`));
+    assert.deepEqual(readBoard(BOARD).items.find((i) => i.id === x.id).blockedBy, [z.id]);
+    assert.match(run(b('chain', x.id)).err, /usage: office-todo chain/);
+  });
+
   test('context from an argument and from stdin', () => {
     const it = json(b('add', 'Has background'));
     assert.match(ok(b('context', it.id, 'the', 'root', 'cause', '--title', 'why')), /added explanation .*1 background entry/);

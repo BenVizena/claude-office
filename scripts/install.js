@@ -88,6 +88,7 @@ ${T} move <id> --parent <id>        # nest an existing item under another (or --
 ${T} depend <id> --on <other>        # <id> can't start until <other> is done (auto blocked/unblocked)
 ${T} check <id> "npm test"          # a command that proves it is done (or --clear); the user approves it in the office (unless they let checks run unapproved)
 ${T} undepend <id> --on <other>      # drop that dependency
+${T} chain <a> <b> <c> [--replace]    # set an order in one go: each waits on the one before; --replace drops their other deps on each other (reordering)
 ${T} context <id> "why / what I found" [--title "..."]          # explanation
 ${T} context <id> --kind log --title "failing test" --file out.txt   # a log (or --file - to pipe)
 ${T} context <id> --kind code --lang ts --title "the fix" --file - < snippet.ts

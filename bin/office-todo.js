@@ -18,6 +18,8 @@
 //                                     (it starts it or asks the user, as the office setting says)
 //   depend <id> --on <id>             <id> can't start until the other is done (marks it blocked meanwhile)
 //   undepend <id> --on <id>           remove that dependency
+//   chain <id> <id> [<id> ...] [--replace]   set an order in one go: each waits on the one before; --replace also
+//                                     drops their other dependencies on each other (outside ones are kept)
 //   edit <id> [--text "new title"] [--priority low|normal|high] [--summary "one line of context" | --summary ""]
 //   mine                              items claimed by this session
 //   completed [--days N]              recently completed items, newest first
@@ -39,7 +41,7 @@ import { requestRun, runsOf } from '../server/chain.js';
 import { sessionRunPolicy } from '../server/runpolicy.js';
 import { setStatus, clearStatus, readStatus } from '../server/status.js';
 import {
-  readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, moveItem, addDependency, removeDependency, openBlockers, claimIsStale, dependents, setCheck,
+  readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, moveItem, addDependency, removeDependency, setChain, openBlockers, claimIsStale, dependents, setCheck,
 } from '../server/todos.js';
 import { subscribe, unsubscribe, scan, markShown, subCount, watcherBeat, WATCHER_BEAT_MS } from '../server/news.js';
 import {
@@ -76,7 +78,7 @@ for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a.startsWith('--')) {
     const k = a.slice(2);
-    if (['json', 'all', 'global', 'force', 'root', 'clear'].includes(k)) flags[k] = true;
+    if (['json', 'all', 'global', 'force', 'root', 'clear', 'replace'].includes(k)) flags[k] = true;
     else flags[k] = argv[++i];
   } else pos.push(a);
 }
@@ -492,6 +494,20 @@ ${d.text}`);
       console.log(cmd === 'depend'
         ? `"${r.text}" now waits on "${on?.text}"${r.status === 'blocked' ? ' (marked blocked until that is done)' : ''}`
         : `"${r.text}" no longer waits on "${on?.text}"`);
+      break;
+    }
+    case 'chain': {
+      if (rest.length < 2) throw new Error('usage: office-todo chain <id> <id> [<id> ...] [--replace]');
+      const r = setChain(slug, rest, { by, replace: !!flags.replace });
+      if (flags.json) { print(r); break; }
+      const b = readBoard(slug);
+      console.log(`order: ${r.order.map((x) => x.id).join(' → ')}`);
+      for (const x of r.order) console.log(line(b.items.find((i) => i.id === x.id), b, '  '));
+      if (r.dropped.length) console.log(`dropped: ${r.dropped.map((d) => `${d.id} no longer waits on ${d.on}`).join('; ')}`);
+      if (r.outside.length) {
+        console.log('also waiting on items in this chain:');
+        for (const x of r.outside) console.log(line(b.items.find((i) => i.id === x.id), b, '  '));
+      }
       break;
     }
     case 'status': {
