@@ -382,6 +382,64 @@ export function removeDependency(slug, id, on, { by }) {
 }
 
 /**
+ * Set a whole order at once: each item in `ids` waits on the one before it (one board write, all or nothing).
+ * replace: also drop the listed items' other dependencies on items in the list, so the list is the order among them.
+ * Dependencies on items outside the list are always kept. Refuses loops, saying which edge closes one.
+ * Returns { order, outside, dropped }: the listed items in order, open items outside the list that still wait on
+ * one of them, and the [item, on] edges removed by replace.
+ */
+export function setChain(slug, ids, { by, replace = false }) {
+  if (ids.length < 2) throw new Error('a chain needs at least two items');
+  return mutate(slug, null, (b) => {
+    const order = ids.map((id) => find(b, id));
+    const inList = new Set(order.map((x) => x.id));
+    if (inList.size !== order.length) throw new Error('an item appears in the chain more than once');
+    const dropped = [];
+    order.forEach((it, i) => {
+      const prev = order[i - 1];
+      let deps = it.blockedBy || [];
+      if (replace) {
+        for (const d of deps) if (inList.has(d) && d !== prev?.id) dropped.push([it, b.items.find((x) => x.id === d)]);
+        deps = deps.filter((d) => !inList.has(d) || d === prev?.id);
+      }
+      if (prev) deps = [...new Set([...deps, prev.id])];
+      if (deps.length) it.blockedBy = deps; else delete it.blockedBy;
+      it.updatedAt = Date.now();
+      it.updatedBy = by;
+    });
+    // any loop now must pass through a listed item: look for one
+    const state = new Map(); // id -> 1 visiting, 2 done
+    const stack = [];
+    const visit = (x) => {
+      if (state.get(x.id) === 2) return null;
+      if (state.get(x.id) === 1) return stack.slice(stack.indexOf(x)).concat(x);
+      state.set(x.id, 1); stack.push(x);
+      for (const d of x.blockedBy || []) {
+        const n = b.items.find((y) => y.id === d);
+        const loop = n && visit(n);
+        if (loop) return loop;
+      }
+      stack.pop(); state.set(x.id, 2);
+      return null;
+    };
+    for (const it of order) {
+      const loop = visit(it);
+      if (loop) {
+        throw new Error(`that order makes a loop: ${loop.map((x) => x.id).join(' waits on ')}`
+          + `${replace ? '' : '. Add --replace to drop the listed items\' other dependencies on each other'}`);
+      }
+    }
+    syncBlocked(b);
+    const outside = b.items.filter((x) => x.status !== 'done' && !inList.has(x.id) && (x.blockedBy || []).some((d) => inList.has(d)));
+    return {
+      order: order.map((x) => ({ ...x })),
+      outside: outside.map((x) => ({ ...x })),
+      dropped: dropped.map(([it, on]) => ({ id: it.id, on: on?.id })),
+    };
+  });
+}
+
+/**
  * Re-parent an item (keeps its id, claim, background and history). parent = null makes it top-level.
  * before/after (optional): a sibling id to place it next to; that level's order is then fixed by hand.
  */

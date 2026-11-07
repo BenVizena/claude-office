@@ -6,7 +6,7 @@ import path from 'node:path';
 import { TODO_DIR } from '../server/config.js';
 import {
   readBoard, listBoards, addItem, updateItem, claimItem, releaseItem, removeItem, markSessionClaims, addDetail, readDetails,
-  addDependency, removeDependency, moveItem, children, sortSiblings, openBlockers, claimIsStale, PENDING_STALE_MS,
+  addDependency, removeDependency, setChain, moveItem, children, sortSiblings, openBlockers, claimIsStale, PENDING_STALE_MS,
 } from '../server/todos.js';
 
 let n = 0;
@@ -264,6 +264,32 @@ describe('dependencies', () => {
     addDependency(s, b.id, a.id, { by: 'x' });
     addDependency(s, c.id, b.id, { by: 'x' });
     assert.throws(() => addDependency(s, a.id, c.id, { by: 'x' }), /loop/);
+  });
+
+  test('chain sets a whole order at once, and --replace reorders it', () => {
+    const s = fresh();
+    const [a, b, c, d] = ['a', 'b', 'c', 'd'].map((text) => addItem(s, null, { text }));
+    const out = addItem(s, null, { text: 'outside' });
+    const ext = addItem(s, null, { text: 'external dep' });
+    addDependency(s, out.id, d.id, { by: 'x' });
+    addDependency(s, a.id, ext.id, { by: 'x' });
+    const r = setChain(s, [a.id, b.id, c.id, d.id], { by: 'x' });
+    assert.deepEqual(r.order.map((x) => x.id), [a.id, b.id, c.id, d.id]);
+    assert.deepEqual(r.outside.map((x) => x.id), [out.id]);
+    assert.deepEqual(get(s, c.id).blockedBy, [b.id]);
+    assert.equal(get(s, b.id).status, 'blocked');
+    // moving d to the front without --replace loops: d still waits on c, which waits on ... a, which would wait on d
+    assert.throws(() => setChain(s, [d.id, a.id, b.id, c.id], { by: 'x' }), /loop.*--replace/);
+    assert.deepEqual(get(s, a.id).blockedBy, [ext.id], 'a refused chain changes nothing');
+    const r2 = setChain(s, [d.id, a.id, b.id, c.id], { by: 'x', replace: true });
+    assert.deepEqual(r2.dropped, [{ id: d.id, on: c.id }]);
+    assert.equal(get(s, d.id).blockedBy, undefined);
+    assert.equal(get(s, d.id).status, 'todo');
+    assert.deepEqual(get(s, a.id).blockedBy, [ext.id, d.id], 'dependencies outside the list are kept');
+    assert.deepEqual(get(s, c.id).blockedBy, [b.id]);
+    assert.throws(() => setChain(s, [a.id], { by: 'x' }), /at least two/);
+    assert.throws(() => setChain(s, [a.id, b.id, a.id], { by: 'x' }), /more than once/);
+    assert.throws(() => setChain(s, [a.id, 'ffffff'], { by: 'x' }), /no item ffffff on board/);
   });
 });
 
