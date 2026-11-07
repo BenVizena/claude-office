@@ -40,7 +40,10 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
 
   // which todos each session has claimed (shown at their desk)
   const claims = new Map();
+  const itemState = { byId: new Map(), byText: new Map() }; // for office questions that have since been settled
   for (const bd of listBoards()) for (const it of bd.items) {
+    itemState.byId.set(`${bd.id}:${it.id}`, it.status);
+    if (itemState.byText.get(it.text) !== 'open') itemState.byText.set(it.text, it.status === 'done' ? 'done' : 'open');
     if (it.claim?.session && !it.claim.ended && it.status !== 'done') {
       if (!claims.has(it.claim.session)) claims.set(it.claim.session, []);
       claims.get(it.claim.session).push({ board: bd.id, id: it.id, text: it.text, status: it.status });
@@ -92,7 +95,7 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
           pods.push(best);
         }
       }
-      best.sessions.push(withStatus({ ...summarize(s, hooks.get(s.id), now, background), claims: claims.get(s.id) || [], results: sessionResults.get(s.id) || null }, statuses.get(s.id), s));
+      best.sessions.push(withStatus({ ...summarize(s, hooks.get(s.id), now, background), claims: claims.get(s.id) || [], results: sessionResults.get(s.id) || null }, statuses.get(s.id), s, itemState));
     }
 
     let lastActivity = 0;
@@ -175,9 +178,26 @@ export function markSteps(pods, board) {
 }
 
 /** Attach the agent's own status line; an unanswered --needs-you question makes it "needs you". */
-function withStatus(sum, st, raw) {
+// what the office itself puts on a session when a sequence stops or a request fails (see notify in index.js)
+const OFFICE_QUESTIONS = new Set(['Sequence stopped', 'Sequence request turned down', 'Sequence request failed']);
+
+/**
+ * A question the office asked on a session's behalf that no longer needs the user: the item it is about has been done
+ * since. Its session often ended long ago, so no reply of the user's will ever clear it. Statuses set before `about`
+ * was recorded name the item in quotes ("…" in the question); those count when an item of that text is done and none
+ * with it is open.
+ */
+export function officeQuestionSettled(st, itemState) {
+  if (!st?.needsYou || !itemState) return false;
+  if (st.about?.board && st.about?.item) return itemState.byId.get(`${st.about.board}:${st.about.item}`) === 'done';
+  if (!OFFICE_QUESTIONS.has(st.text)) return false;
+  const named = /"([^"]+)"/.exec(st.needsYou)?.[1];
+  return !!named && itemState.byText.get(named) === 'done';
+}
+
+function withStatus(sum, st, raw, itemState) {
   if (!st) return sum;
-  const asking = st.needsYou && st.at > (raw.lastUserPromptAt || 0) && sum.status !== 'gone';
+  const asking = st.needsYou && st.at > (raw.lastUserPromptAt || 0) && sum.status !== 'gone' && !officeQuestionSettled(st, itemState);
   sum.agentStatus = {
     text: st.text || null, mood: st.mood || null, at: st.at || null,
     needsYou: asking ? st.needsYou : null,

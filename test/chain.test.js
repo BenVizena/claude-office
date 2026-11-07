@@ -524,6 +524,11 @@ describe('turnOver', () => {
     assert.equal(turnOver({ event: 'SessionEnd', at: t - 5 }, t, t + 1), true);
     assert.equal(turnOver({ event: 'UserPromptSubmit', at: t - 5 }, t, t + 60000), false);
     assert.equal(turnOver(undefined, t, t + 1000), false);
+    // the idle "waiting for your input" notification means the same as a Stop; a permission prompt is mid-turn
+    assert.equal(turnOver({ event: 'Notification', kind: 'idle_prompt', at: t + 60000 }, t, t + 60001), true);
+    assert.equal(turnOver({ event: 'Notification', message: 'Claude is waiting for your input', at: t + 60000 }, t, t + 60001), true);
+    assert.equal(turnOver({ event: 'Notification', kind: 'permission_prompt', message: 'Claude needs your permission to use Bash', at: t + 5 }, t, t + 600000), false);
+    assert.equal(turnOver({ event: 'Notification', message: 'Claude needs your permission to use Bash', at: t + 5 }, t, t + 600000), false);
     assert.equal(turnOver(undefined, t, t + 5 * 60000), true);
   });
 });

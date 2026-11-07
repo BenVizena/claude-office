@@ -158,14 +158,20 @@ export function stopRun(slug, reason = 'stopped by you', id) {
   });
 }
 
+/** A Notification hook for a session idle at its prompt (notification_type idle_prompt, or its message). */
+export const isIdleNotice = (hook) => hook?.event === 'Notification'
+  && (hook.kind === 'idle_prompt' || (!hook.kind && /waiting for your input/i.test(hook.message || '')));
+
 /**
  * Is the session's turn over (it went back to its prompt), so moving on can't race it?
- * hook: its last hook event { event, at } (the office keeps them in memory), or undefined.
+ * hook: its last hook event { event, at, kind?, message? } (the office keeps them in memory), or undefined.
  */
 export function turnOver(hook, doneAt, now = Date.now()) {
   if (!hook) return now - doneAt >= NO_HOOKS_MS;
   if (hook.event === 'SessionEnd') return true;
-  if (hook.event === 'Stop') return hook.at >= doneAt || now - doneAt >= TURN_GRACE_MS;
+  // Claude Code's "waiting for your input" notification comes only while the session sits at its prompt, so it says the
+  // same as a Stop (and may be the only event the office sees after a restart). A permission prompt is mid-turn: not it.
+  if (hook.event === 'Stop' || isIdleNotice(hook)) return hook.at >= doneAt || now - doneAt >= TURN_GRACE_MS;
   return now - Math.max(hook.at, doneAt) >= STUCK_TURN_MS;
 }
 
@@ -299,7 +305,7 @@ async function tickRun(slug, rid, ctx) {
         if (step.worktree) logLine(r, `kept for you: worktree ${step.worktree}, branch ${step.branch}`);
       });
       await halt(res.fail);
-      tell(step.session, { text: 'Sequence stopped', needsYou: res.fail });
+      tell(step.session, { text: 'Sequence stopped', needsYou: res.fail, about: { board: slug, item: step.id } });
       did = 'stopping';
     } else if (res === 'waiting' && did === 'working') did = 'waiting for its turn to end';
   }

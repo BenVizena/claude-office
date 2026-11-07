@@ -23,13 +23,15 @@ export function readStatus(session) {
   try { return readJson(fileFor(session), null); } catch { return null; }
 }
 
-export function setStatus(session, { text, mood, needsYou }) {
+/** about: { board, item } when the office asks about a to-do item (its question lapses once that item is done). */
+export function setStatus(session, { text, mood, needsYou, about }) {
   const file = fileFor(session);
   const cur = readJson(file, { history: [] });
   const entry = { text: clean(text, MAX_TEXT), at: Date.now() };
   if (!entry.text && !needsYou) throw new Error('give a status, e.g. office-todo status "Fixing the login redirect"');
   if (mood) entry.mood = clean(mood, 8);
   if (needsYou) entry.needsYou = clean(needsYou, 200);
+  if (needsYou && about?.board && about?.item) entry.about = { board: String(about.board), item: String(about.item) };
   const history = [...(cur.history || []), entry].slice(-MAX_HISTORY);
   const next = { ...entry, history };
   writeJsonAtomic(file, next);

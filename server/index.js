@@ -180,7 +180,7 @@ const routes = {
     if (!b.session_id) return { ok: false };
     // the hook printed the news we gave it: it can leave the outbox
     if (b.ack !== undefined) { await whenUnlocked(() => ackNews(b.session_id, b.ack)); markDirty(); return { ok: true }; }
-    hooks.set(b.session_id, { event: b.hook_event_name, at: Date.now(), tool: b.tool_name, message: b.message, cwd: nativePath(b.cwd) });
+    hooks.set(b.session_id, { event: b.hook_event_name, at: Date.now(), tool: b.tool_name, message: b.message, kind: typeof b.notification_type === 'string' ? b.notification_type.slice(0, 40) : undefined, cwd: nativePath(b.cwd) });
     if (['SessionStart', 'Stop', 'SessionEnd', 'UserPromptSubmit', 'Notification', 'PreCompact', 'PermissionRequest'].includes(b.hook_event_name)) {
       scanner.scan();
       broadcast({ type: 'event', event: b.hook_event_name, sessionId: b.session_id, message: b.message || null });

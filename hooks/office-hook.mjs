@@ -21,6 +21,7 @@ process.stdin.on('end', () => {
     hook_event_name: ev.hook_event_name,
     tool_name: ev.tool_name,
     message: typeof ev.message === 'string' ? ev.message.slice(0, 300) : undefined,
+    notification_type: typeof ev.notification_type === 'string' ? ev.notification_type.slice(0, 40) : undefined,
     cwd: ev.cwd,
   };
   const post = (payload, onReply) => {
