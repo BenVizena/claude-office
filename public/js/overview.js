@@ -38,6 +38,7 @@ export function groupOffice(state, range, roomKey = null) {
 
 function worktreeBadge(room, pod) {
   if (!room.isGit) return '<span class="ov-badge">folder</span>';
+  if (pod.step) return `<span class="ov-badge${pod.removed ? ' muted' : ' wt'}" title="${esc(pod.path)}">sequence step ${esc(pod.step.id)}${pod.step.text ? ` · ${esc(pod.step.text)}` : ''} · ${esc(pod.step.phase)}</span>`;
   if (pod.removed) return '<span class="ov-badge muted">removed worktree</span>';
   if (pod.isMain) return '<span class="ov-badge">main checkout</span>';
   const folder = pod.path.split(/[\\/]/).pop();

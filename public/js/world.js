@@ -34,6 +34,9 @@ function label(className, html) {
 
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]); }
 
+// sign subtitle for a sequence step's desk, by its phase (server/chain.js step.phase, or office.js markSteps)
+const STEP_PHASE = { launching: 'starting', working: 'working', checking: 'checking', merging: 'merging', rechecking: 'checking merge', merged: 'merged', kept: 'kept, not merged' };
+
 export class World {
   constructor(scene) {
     this.scene = scene;
@@ -78,7 +81,7 @@ export class World {
     for (const room of state.rooms) {
       seen.add(room.key);
       let view = this.rooms.get(room.key);
-      const sig = JSON.stringify([room.size, room.pos, room.decor, room.pods.map((p) => [p.key, p.branch, p.removed, p.seats]), room.name, state.catalog.custom.length, state.catalog.pending.map((p) => p.id)]);
+      const sig = JSON.stringify([room.size, room.pos, room.decor, room.pods.map((p) => [p.key, p.branch, p.removed, p.seats, p.step?.text, p.step?.phase]), room.name, state.catalog.custom.length, state.catalog.pending.map((p) => p.id)]);
       if (!view || view.sig !== sig) {
         if (view) this.disposeRoom(view);
         view = this.buildRoom(room);
@@ -278,7 +281,9 @@ export class World {
     const g = new THREE.Group();
     const desk = deskPod(accent, pod.seats || SEATS.length);
     g.add(desk.group);
-    const sign = nameplate(pod.branch || (pod.detached ? `@${pod.head}` : 'workspace'), pod.removed ? 'worktree removed' : pod.isMain ? 'main worktree' : 'worktree', accent);
+    const sign = pod.step
+      ? nameplate(pod.step.text || pod.branch || `step ${pod.step.id}`, `sequence step ${pod.step.id} · ${STEP_PHASE[pod.step.phase] || pod.step.phase}`, accent)
+      : nameplate(pod.branch || (pod.detached ? `@${pod.head}` : 'workspace'), pod.removed ? 'worktree removed' : pod.isMain ? 'main worktree' : 'worktree', accent);
     sign.position.set(-desk.width / 2 - 0.45, 0, 0.9);
     sign.rotation.y = 0.5;
     sign.userData.interact = { kind: 'pod', pod: pod.key, label: pod.branch || 'workspace' };
@@ -432,7 +437,7 @@ export class World {
       pv.dyn.add(pv.dustGroup);
       pv.dustSig = dustSig;
     }
-    pv.sign.userData.interact.label = `${pod.branch || 'workspace'} · ${pod.sessions.length} session${pod.sessions.length === 1 ? '' : 's'}`;
+    pv.sign.userData.interact.label = `${pod.step ? `step ${pod.step.id}: ${pod.step.text || pod.branch}` : pod.branch || 'workspace'} · ${pod.sessions.length} session${pod.sessions.length === 1 ? '' : 's'}`;
   }
 
   /** The little results screen on seat i's desk: there while the session has results, showing its latest line. */
