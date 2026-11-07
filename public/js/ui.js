@@ -280,7 +280,7 @@ export class UI {
     for (const id of v.expanded || []) {
       for (const b of boards) {
         const it = b.items.find((x) => x.id === id);
-        if (it && v.details?.[id]?.entries && v.details[id].entries.length !== (it.details || 0) && !v.details[id].loading) { v.details[id].loading = true; this.loadDetails(b.id, id); }
+        if (it && v.details?.[id]?.entries && v.details[id].entries.filter((e) => !e.retired).length !== (it.details || 0) && !v.details[id].loading) { v.details[id].loading = true; this.loadDetails(b.id, id); }
       }
     }
     const open = board.items.filter((i) => i.status !== 'done').length;

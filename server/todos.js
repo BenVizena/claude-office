@@ -125,8 +125,15 @@ function cleanSummary(t) {
   return { summary: `${cut.replace(/[\s,;:.\-–—]+$/, '')}…`, full: s };
 }
 function keepFullSummary(slug, id, full, { by, session }) {
-  addDetail(slug, id, { by, session, kind: 'explanation', title: 'Full summary', text: full });
-  return `the summary was over ${MAX_SUMMARY} characters, so it was shortened and the full text kept in its background (show ${id}). A summary is one line: put detail in \`context\`.`;
+  // a re-edited summary replaces the previous full text instead of piling up beside it
+  const prev = readDetails(slug, id, { live: true }).findLast((e) => e.title === 'Full summary');
+  const r = addDetail(slug, id, { by, session, kind: 'explanation', title: 'Full summary', text: full, replaces: prev?.n });
+  return { details: r.details, hint: `the summary was over ${MAX_SUMMARY} characters, so it was shortened and the full text kept in its background (show ${id}). A summary is one line: put detail in \`context\`.` };
+}
+/** The summary changed to one that fits: a kept "Full summary" no longer describes it, so retire it. */
+function retireFullSummary(slug, id, { by, session }) {
+  const prev = readDetails(slug, id, { live: true }).findLast((e) => e.title === 'Full summary');
+  return prev ? retireDetail(slug, id, prev.n, { by, session, why: 'the summary was changed' }) : null;
 }
 function cleanPriority(p) {
   if (!PRIORITIES.includes(p)) throw new Error(`priority must be one of ${PRIORITIES.join(', ')}`);
@@ -159,8 +166,8 @@ export function addItem(slug, meta, { text, by = 'you', session, priority = 'nor
     return item;
   });
   if (!full) return created;
-  const hint = keepFullSummary(slug, created.id, full, { by, session });
-  return { ...created, details: 1, hint };
+  const { details, hint } = keepFullSummary(slug, created.id, full, { by, session });
+  return { ...created, details, hint };
 }
 
 export function updateItem(slug, id, patch) {
@@ -194,9 +201,10 @@ export function updateItem(slug, id, patch) {
     }
     return result;
   });
-  if (!sum?.full) return updated;
-  const hint = keepFullSummary(slug, updated.id, sum.full, { by: patch.by, session: patch.session });
-  return { ...updated, details: (updated.details || 0) + 1, hint: updated.hint ? `${hint}\n${updated.hint}` : hint };
+  if (sum && !sum.full) { const r = retireFullSummary(slug, updated.id, { by: patch.by, session: patch.session }); return r ? { ...updated, details: r.details } : updated; }
+  if (!sum) return updated;
+  const { details, hint } = keepFullSummary(slug, updated.id, sum.full, { by: patch.by, session: patch.session });
+  return { ...updated, details, hint: updated.hint ? `${hint}\n${updated.hint}` : hint };
 }
 
 /** Claim an item: "I'm working on this". Fails if another live session holds it (unless force). */
@@ -336,11 +344,39 @@ function detailsFile(slug, id) {
   return path.join(TODO_DIR, 'details', slug, `${id}.json`);
 }
 
-export function readDetails(slug, id) {
-  return readJson(detailsFile(slug, id), []);
+// Every entry has a stable number `n` (1, 2, … in the order added; files from before numbering get theirs by
+// position on first read). Entries are never deleted by hand: a stale one is *retired* (kept, with who/when/why,
+// and hidden unless asked for) or *replaced* (retired in favour of a new entry that says `replaces: n`).
+function numbered(entries) {
+  let next = entries.reduce((m, e) => Math.max(m, e.n || 0), 0) + 1;
+  for (const e of entries) if (!e.n) e.n = next++;
+  return entries;
+}
+export const liveDetails = (entries) => entries.filter((e) => !e.retired);
+
+/** All entries, oldest first (retired ones too, marked `retired`); `{ live: true }` leaves the retired ones out. */
+export function readDetails(slug, id, { live = false } = {}) {
+  const entries = numbered(readJson(detailsFile(slug, id), []));
+  return live ? liveDetails(entries) : entries;
 }
 
-export function addDetail(slug, id, { by = 'you', session, kind = 'explanation', title, text, lang }) {
+function findEntry(entries, n) {
+  const e = entries.find((x) => x.n === Number(n));
+  if (!e) throw new Error(`no background entry #${n} on this item (show lists their numbers)`);
+  if (e.retired) throw new Error(`background entry #${n} is already retired${e.retired.replacedBy ? ` (replaced by #${e.retired.replacedBy})` : ''}`);
+  return e;
+}
+
+function writeDetails(slug, it, entries) {
+  const file = detailsFile(slug, it.id);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  writeJsonAtomic(file, entries);
+  it.details = liveDetails(entries).length;
+  it.updatedAt = Date.now();
+}
+
+/** Add an entry. `replaces: n` retires live entry #n in favour of this one (its history is kept). */
+export function addDetail(slug, id, { by = 'you', session, kind = 'explanation', title, text, lang, replaces }) {
   if (!text || !String(text).trim()) throw new Error('nothing to add');
   if (!['explanation', 'log', 'code', 'note'].includes(kind)) throw new Error('kind must be explanation, log, code or note');
   let body = String(text);
@@ -348,15 +384,31 @@ export function addDetail(slug, id, { by = 'you', session, kind = 'explanation',
   if (body.length > MAX_ENTRY) { body = `${body.slice(0, MAX_ENTRY / 2)}\n… [${body.length - MAX_ENTRY} characters trimmed] …\n${body.slice(-MAX_ENTRY / 2)}`; truncated = true; }
   return mutate(slug, null, (b) => {
     const it = find(b, id);
-    const file = detailsFile(slug, it.id);
-    const entries = readJson(file, []);
-    entries.push({ by, ...(session ? { session } : {}), at: Date.now(), kind, ...(title ? { title: String(title).slice(0, 120) } : {}), ...(lang ? { lang: String(lang).slice(0, 20) } : {}), text: body });
-    while (entries.length > 1 && entries.reduce((n, e) => n + e.text.length, 0) > MAX_TOTAL) entries.shift();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    writeJsonAtomic(file, entries);
-    it.details = entries.length;
-    it.updatedAt = Date.now();
-    return { ...it, truncated };
+    const entries = numbered(readJson(detailsFile(slug, it.id), []));
+    const old = replaces != null && replaces !== '' ? findEntry(entries, replaces) : null;
+    const n = entries.reduce((m, e) => Math.max(m, e.n), 0) + 1;
+    const at = Date.now();
+    entries.push({ n, by, ...(session ? { session } : {}), at, kind, ...(title ? { title: String(title).slice(0, 120) } : {}), ...(lang ? { lang: String(lang).slice(0, 20) } : {}), ...(old ? { replaces: old.n } : {}), text: body });
+    if (old) old.retired = { by, ...(session ? { session } : {}), at, replacedBy: n };
+    // over the size limit: drop retired entries first, then the oldest live ones (never the new one)
+    const size = () => entries.reduce((m, e) => m + e.text.length, 0);
+    while (size() > MAX_TOTAL && entries.some((e) => e.retired)) entries.splice(entries.findIndex((e) => e.retired), 1);
+    while (entries.length > 1 && size() > MAX_TOTAL) entries.shift();
+    writeDetails(slug, it, entries);
+    return { ...it, n, ...(old ? { replaced: old.n } : {}), truncated };
+  });
+}
+
+/** Retire live entry #n: it stays in the history (who retired it, when, why) but is no longer shown by default. */
+export function retireDetail(slug, id, n, { by = 'you', session, why }) {
+  return mutate(slug, null, (b) => {
+    const it = find(b, id);
+    const entries = numbered(readJson(detailsFile(slug, it.id), []));
+    const e = findEntry(entries, n);
+    const reason = String(why ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
+    e.retired = { by, ...(session ? { session } : {}), at: Date.now(), ...(reason ? { why: reason } : {}) };
+    writeDetails(slug, it, entries);
+    return { ...it, retiredEntry: e.n };
   });
 }
 

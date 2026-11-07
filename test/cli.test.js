@@ -89,8 +89,30 @@ describe('office-todo board commands', () => {
     assert.match(ok(b('context', it.id, 'the', 'root', 'cause', '--title', 'why')), /added explanation .*1 background entry/);
     assert.match(ok(b('context', it.id, '--kind', 'log', '--file', '-'), { input: 'line 1\nline 2\n' }), /2 background entries/);
     const shown = ok(b('show', it.id));
-    assert.match(shown, /--- explanation: why/);
+    assert.match(shown, /--- #1 explanation: why/);
     assert.match(shown, /line 1\nline 2/);
+  });
+
+  test('context --replaces and --retire hide stale entries but keep them for show --all', () => {
+    const it = json(b('add', 'Stale background'));
+    ok(b('context', it.id, 'rescore game7 first', '--title', 'next'));
+    ok(b('context', it.id, 'see the log'));
+    assert.match(ok(b('context', it.id, 'game7 is already rescored', '--replaces', '1')), /added explanation #3 .*in place of #1 .*2 background entries/);
+    assert.match(ok(b('context', it.id, '--retire', '#2', 'log', 'is', 'gone')), /retired background #2 .*1 live entry/);
+    const shown = ok(b('show', it.id));
+    assert.doesNotMatch(shown, /rescore game7 first|see the log/);
+    assert.match(shown, /--- #3 explanation \(.*\) — replaces #1\ngame7 is already rescored/);
+    assert.match(shown, /2 retired background entries hidden/);
+    const all = ok(b('show', it.id, '--all'));
+    assert.match(all, /#1 explanation: next .*\[RETIRED, replaced by #3/);
+    assert.match(all, /#2 explanation .*\[RETIRED: log is gone/);
+    const j = json(b('show', it.id));
+    assert.deepEqual(j.background.map((e) => e.n), [3]);
+    assert.equal(j.retiredHidden, 2);
+    assert.equal(j.details, 1);
+    assert.match(run(b('context', it.id, '--retire', '2')).err, /already retired/);
+    assert.match(run(b('context', it.id, '--retire', '9')).err, /no background entry #9/);
+    assert.match(run(b('context', it.id, 'x', '--replaces', 'last')).err, /entry number/);
   });
 
   test('errors exit non-zero with a message', () => {

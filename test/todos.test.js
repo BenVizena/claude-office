@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { TODO_DIR } from '../server/config.js';
 import {
-  readBoard, listBoards, addItem, updateItem, claimItem, releaseItem, removeItem, markSessionClaims, addDetail, readDetails,
+  readBoard, listBoards, addItem, updateItem, claimItem, releaseItem, removeItem, markSessionClaims, addDetail, readDetails, retireDetail,
   addDependency, removeDependency, setChain, moveItem, children, sortSiblings, openBlockers, claimIsStale, PENDING_STALE_MS,
 } from '../server/todos.js';
 
@@ -100,8 +100,15 @@ describe('status changes', () => {
     assert.equal(get(s, it.id).summary.length, 200);
     assert.match(up.hint, /shortened/);
     assert.equal(readDetails(s, it.id).length, 2);
-    updateItem(s, it.id, { summary: 'short', by: 'me' });
+    const live = readDetails(s, it.id, { live: true });
+    assert.equal(live.length, 1, 'the new full summary replaces the previous one');
+    assert.equal(live[0].replaces, 1);
+    assert.equal(up.details, 1);
+    const short = updateItem(s, it.id, { summary: 'short', by: 'me' });
     assert.equal(readDetails(s, it.id).length, 2, 'a short summary adds no background');
+    assert.equal(readDetails(s, it.id, { live: true }).length, 0, '...and retires the full text it no longer matches');
+    assert.equal(short.details, 0);
+    assert.equal(get(s, it.id).details, 0);
   });
 
   test('summary can be edited and cleared', () => {
@@ -401,5 +408,52 @@ describe('background details', () => {
     const d = readDetails(s, it.id);
     assert.ok(d.reduce((m, e) => m + e.text.length, 0) <= 200000);
     assert.equal(d.at(-1).text[0], '6', 'the newest entry is kept');
+  });
+
+  test('entries are numbered; replacing or retiring keeps the history but hides it from the live list', () => {
+    const s = fresh();
+    const it = addItem(s, null, { text: 'a' });
+    assert.equal(addDetail(s, it.id, { text: 'rescore first', by: 'one' }).n, 1);
+    addDetail(s, it.id, { text: 'line ~1785' });
+    const r = addDetail(s, it.id, { text: 'already rescored', by: 'two', session: 'abc', replaces: 1 });
+    assert.deepEqual([r.n, r.replaced, r.details], [3, 1, 2]);
+    const t = retireDetail(s, it.id, 2, { by: 'two', why: '  line   moved ' });
+    assert.equal(t.details, 1);
+    const all = readDetails(s, it.id);
+    assert.deepEqual(all.map((e) => e.n), [1, 2, 3]);
+    assert.deepEqual(all[0].retired && [all[0].retired.by, all[0].retired.session, all[0].retired.replacedBy], ['two', 'abc', 3]);
+    assert.equal(all[0].text, 'rescore first', 'the original text is kept');
+    assert.equal(all[1].retired.why, 'line moved');
+    assert.deepEqual(readDetails(s, it.id, { live: true }).map((e) => e.n), [3]);
+    assert.equal(get(s, it.id).details, 1);
+    assert.equal(addDetail(s, it.id, { text: 'more' }).n, 4, 'numbers are never reused');
+    assert.throws(() => retireDetail(s, it.id, 1, { by: 'x' }), /already retired .*replaced by #3/);
+    assert.throws(() => addDetail(s, it.id, { text: 'y', replaces: 9 }), /no background entry #9/);
+    assert.equal(readDetails(s, it.id).length, 4, 'a failed replace adds nothing');
+  });
+
+  test('entries written before numbering get numbers by position', () => {
+    const s = fresh();
+    const it = addItem(s, null, { text: 'a' });
+    addDetail(s, it.id, { text: 'x' });
+    const file = path.join(TODO_DIR, 'details', s, `${it.id}.json`);
+    fs.writeFileSync(file, JSON.stringify([{ by: 'a', at: 1, kind: 'note', text: 'old' }, { by: 'b', at: 2, kind: 'note', text: 'older' }]));
+    assert.deepEqual(readDetails(s, it.id).map((e) => e.n), [1, 2]);
+    retireDetail(s, it.id, 1, { by: 'me' });
+    assert.equal(addDetail(s, it.id, { text: 'new' }).n, 3);
+    assert.deepEqual(readDetails(s, it.id, { live: true }).map((e) => e.text), ['older', 'new']);
+  });
+
+  test('over the size limit, retired entries go before live ones', () => {
+    const s = fresh();
+    const it = addItem(s, null, { text: 'a' });
+    addDetail(s, it.id, { text: 'keep me' });
+    addDetail(s, it.id, { text: 'r'.repeat(39000) });
+    for (let i = 0; i < 4; i++) addDetail(s, it.id, { text: `${i}`.repeat(39000) });
+    retireDetail(s, it.id, 2, { by: 'me' });
+    addDetail(s, it.id, { text: 'z'.repeat(39000) });
+    const d = readDetails(s, it.id);
+    assert.ok(!d.some((e) => e.n === 2), 'the retired entry was dropped');
+    assert.equal(d[0].text, 'keep me', 'the oldest live entry survived');
   });
 });
