@@ -113,10 +113,20 @@ function cleanText(t) {
   if (s.length > 300) throw new Error('keep the title under 300 characters (put detail in the summary or background)');
   return s;
 }
+export const MAX_SUMMARY = 200;
+/** One line. A longer one is not refused: it is cut at a word boundary with an ellipsis and `full` carries the
+ *  whole text, which the caller keeps as a background entry so nothing is lost. */
 function cleanSummary(t) {
   const s = String(t ?? '').replace(/\s+/g, ' ').trim();
-  if (s.length > 200) throw new Error('the summary is one line: keep it under 200 characters (use `context` for more)');
-  return s;
+  if (s.length <= MAX_SUMMARY) return { summary: s };
+  let cut = s.slice(0, MAX_SUMMARY - 1);
+  const sp = cut.lastIndexOf(' ');
+  if (sp > MAX_SUMMARY / 2) cut = cut.slice(0, sp);
+  return { summary: `${cut.replace(/[\s,;:.\-–—]+$/, '')}…`, full: s };
+}
+function keepFullSummary(slug, id, full, { by, session }) {
+  addDetail(slug, id, { by, session, kind: 'explanation', title: 'Full summary', text: full });
+  return `the summary was over ${MAX_SUMMARY} characters, so it was shortened and the full text kept in its background (show ${id}). A summary is one line: put detail in \`context\`.`;
 }
 function cleanPriority(p) {
   if (!PRIORITIES.includes(p)) throw new Error(`priority must be one of ${PRIORITIES.join(', ')}`);
@@ -126,8 +136,9 @@ function cleanPriority(p) {
 export function addItem(slug, meta, { text, by = 'you', session, priority = 'normal', parent, summary }) {
   text = cleanText(text);
   priority = cleanPriority(priority);
-  summary = summary ? cleanSummary(summary) : '';
-  return mutate(slug, meta, (b) => {
+  let full;
+  ({ summary, full } = summary ? cleanSummary(summary) : { summary: '' });
+  const created = mutate(slug, meta, (b) => {
     let parentId;
     if (parent) {
       const p = find(b, parent);
@@ -147,14 +158,18 @@ export function addItem(slug, meta, { text, by = 'you', session, priority = 'nor
     b.items.push(item);
     return item;
   });
+  if (!full) return created;
+  const hint = keepFullSummary(slug, created.id, full, { by, session });
+  return { ...created, details: 1, hint };
 }
 
 export function updateItem(slug, id, patch) {
-  return mutate(slug, null, (b) => {
+  const sum = patch.summary !== undefined ? cleanSummary(patch.summary) : null;
+  const updated = mutate(slug, null, (b) => {
     const it = find(b, id);
     if (patch.text !== undefined) it.text = cleanText(patch.text);
     if (patch.priority !== undefined) it.priority = cleanPriority(patch.priority);
-    if (patch.summary !== undefined) { const s = cleanSummary(patch.summary); if (s) it.summary = s; else delete it.summary; }
+    if (sum) { if (sum.summary) it.summary = sum.summary; else delete it.summary; }
     if (patch.note !== undefined) it.note = patch.note;
     if (patch.status && patch.status !== it.status) {
       it.status = patch.status;
@@ -179,6 +194,9 @@ export function updateItem(slug, id, patch) {
     }
     return result;
   });
+  if (!sum?.full) return updated;
+  const hint = keepFullSummary(slug, updated.id, sum.full, { by: patch.by, session: patch.session });
+  return { ...updated, details: (updated.details || 0) + 1, hint: updated.hint ? `${hint}\n${updated.hint}` : hint };
 }
 
 /** Claim an item: "I'm working on this". Fails if another live session holds it (unless force). */

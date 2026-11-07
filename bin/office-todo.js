@@ -366,11 +366,11 @@ try {
     }
     case 'edit': {
       need();
-      const patch = { by };
+      const patch = { by, session };
       if (flags.text !== undefined) patch.text = flags.text;
       if (flags.priority !== undefined) patch.priority = flags.priority;
       if (flags.summary !== undefined) patch.summary = flags.summary;
-      if (Object.keys(patch).length === 1) throw new Error('usage: office-todo edit <id> [--text "..."] [--priority low|normal|high] [--summary "..."]');
+      if (Object.keys(patch).length === 2) throw new Error('usage: office-todo edit <id> [--text "..."] [--priority low|normal|high] [--summary "..."]');
       print(updateItem(slug, id, patch), readBoard(slug));
       break;
     }
