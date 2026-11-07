@@ -78,7 +78,7 @@ export class World {
     for (const room of state.rooms) {
       seen.add(room.key);
       let view = this.rooms.get(room.key);
-      const sig = JSON.stringify([room.size, room.pos, room.decor, room.pods.map((p) => [p.key, p.branch, p.removed]), room.name, state.catalog.custom.length, state.catalog.pending.map((p) => p.id)]);
+      const sig = JSON.stringify([room.size, room.pos, room.decor, room.pods.map((p) => [p.key, p.branch, p.removed, p.seats]), room.name, state.catalog.custom.length, state.catalog.pending.map((p) => p.id)]);
       if (!view || view.sig !== sig) {
         if (view) this.disposeRoom(view);
         view = this.buildRoom(room);
@@ -186,7 +186,7 @@ export class World {
       pv.group.position.set(p.x, 0, p.z);
       view.group.add(pv.group);
       view.pods.set(pod.key, pv);
-      const wx = 4.2 / 2 + 0.2, wz = 1.6 / 2 + 0.1;
+      const wx = pv.desk.width / 2 + 0.2, wz = 1.6 / 2 + 0.1;
       view.colliders.push({ x0: p.x - wx, z0: p.z - wz, x1: p.x + wx, z1: p.z + wz });
     });
 
@@ -276,10 +276,10 @@ export class World {
   // ------------------------------------------------------------------ pods
   buildPod(pod, accent) {
     const g = new THREE.Group();
-    const desk = deskPod(accent);
+    const desk = deskPod(accent, pod.seats || SEATS.length);
     g.add(desk.group);
     const sign = nameplate(pod.branch || (pod.detached ? `@${pod.head}` : 'workspace'), pod.removed ? 'worktree removed' : pod.isMain ? 'main worktree' : 'worktree', accent);
-    sign.position.set(-4.2 / 2 - 0.45, 0, 0.9);
+    sign.position.set(-desk.width / 2 - 0.45, 0, 0.9);
     sign.rotation.y = 0.5;
     sign.userData.interact = { kind: 'pod', pod: pod.key, label: pod.branch || 'workspace' };
     g.add(sign);
@@ -290,18 +290,18 @@ export class World {
 
   syncPod(pv, pod, room, events) {
     // stable seat assignment
-    const shown = pod.sessions.filter((s) => s.status !== 'gone').sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status] || b.lastActivity - a.lastActivity).slice(0, SEATS.length);
+    const shown = pod.sessions.filter((s) => s.status !== 'gone').sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status] || b.lastActivity - a.lastActivity).slice(0, pv.desk.seats.length);
     const ids = new Set(shown.map((s) => s.id));
     for (const [id] of pv.seats) if (!ids.has(id)) pv.seats.delete(id);
     const used = new Set(pv.seats.values());
     for (const s of shown) {
       if (!pv.seats.has(s.id)) {
-        const free = SEATS.findIndex((_, i) => !used.has(i));
+        const free = pv.desk.seats.findIndex((_, i) => !used.has(i));
         pv.seats.set(s.id, free); used.add(free);
       }
     }
     // seat contents
-    for (let i = 0; i < SEATS.length; i++) {
+    for (let i = 0; i < pv.desk.seats.length; i++) {
       const sid = [...pv.seats].find(([, seat]) => seat === i)?.[0];
       const s = sid ? shown.find((x) => x.id === sid) : null;
       const sig = s ? `${s.id}|${Math.round(s.contextPct * 14)}|${s.status === 'away'}|${s.role}|${(s.claims || []).length}` : '';
@@ -311,16 +311,16 @@ export class World {
         pv.seatGroups = pv.seatGroups || [];
         const sg = new THREE.Group();
         if (s) {
-          sg.add(clutter(i, s.contextPct, s.id));
+          sg.add(clutter(pv.desk.seats[i], s.contextPct, s.id));
           // claimed to-dos: sticky notes on top of the monitor
           (s.claims || []).slice(0, 3).forEach((c, k) => {
-            const seat = SEATS[i];
+            const seat = pv.desk.seats[i];
             const note = box(0.13, 0.13, 0.012, ['#fff27a', '#ffc2d4', '#bfe8ff'][k], seat.x + (seat.side < 0 ? -1 : 1) * (0.2 - k * 0.15), DESK_H + 0.44, seat.side * 0.4);
             note.rotation.z = (k - 1) * 0.12;
             sg.add(note);
           });
           if (s.status === 'away') {
-            const pose = seatPose(i);
+            const pose = seatPose(pv.desk.seats[i]);
             const j = jacket(ROLE_STYLE[s.role]?.shirt || '#5b6b8c');
             j.position.set(pose.x, 0, pose.z - Math.sign(pose.z) * 0.22);
             j.rotation.y = pose.rotY;
@@ -420,7 +420,7 @@ export class World {
     const paperSig = String(Math.min(20, pod.dirty || 0));
     if (pv.paperSig !== paperSig) {
       if (pv.paperGroup) { pv.dyn.remove(pv.paperGroup); disposeTree(pv.paperGroup); }
-      pv.paperGroup = paperStacks(pod.dirty || 0, pod.key);
+      pv.paperGroup = paperStacks(pod.dirty || 0, pod.key, pv.desk.width);
       pv.dyn.add(pv.paperGroup);
       pv.paperSig = paperSig;
     }
@@ -428,7 +428,7 @@ export class World {
     const dustSig = Math.round(pod.dust * 10);
     if (pv.dustSig !== dustSig) {
       if (pv.dustGroup) { pv.dyn.remove(pv.dustGroup); disposeTree(pv.dustGroup); }
-      pv.dustGroup = dust(pod.dust, pod.key);
+      pv.dustGroup = dust(pod.dust, pod.key, pv.desk.width);
       pv.dyn.add(pv.dustGroup);
       pv.dustSig = dustSig;
     }
@@ -448,7 +448,7 @@ export class World {
     if (!r || r.session !== s.id) {
       if (r) { pv.dyn.remove(r.obj); disposeTree(r.obj); }
       const obj = resultsScreen();
-      const seat = SEATS[i];
+      const seat = pv.desk.seats[i];
       // by the divider, between this seat's monitor and the next (always the same side, so neighbours never meet)
       obj.position.set(seat.x + 0.62, DESK_H, seat.side * 0.16);
       pv.dyn.add(obj);
@@ -618,7 +618,7 @@ export class World {
     }
     for (const a of pv.agents.values()) {
       const s = a.session;
-      const pose = seatPose(a.seat);
+      const pose = seatPose(pv.desk.seats[a.seat]);
       const p = a.person;
       const stateFor = { working: 'sit_type', idle: 'sit_sip', compacting: 'stretch', needs_you: 'wave' }[s.status] || 'sit_idle';
       p.setState(stateFor);

@@ -17,17 +17,61 @@ export const BOARD = { y: 2.3, h: 2.8, todoY: 2.2, todoH: 2.4 };
 export const ARCH = { h: 2.75, signH: 2.6, signW: 8.75 };
 export const DOOR_H = 2.3;
 
-export function roomSize(nPods) {
+// A desk seats 6 (3 a side); a worktree with more sessions gets a longer desk, a seat pair at a time.
+export const BASE_SEATS = 6;
+export const SEAT_W = 1.3;  // desk length per seat pair
+export const MAX_SEATS = 24;
+export const DESK_BASE_W = 4.2;
+
+/** Seats a desk needs for `n` sessions: 6, or the next even number above. */
+export function podSeats(n) {
+  return Math.min(MAX_SEATS, Math.max(BASE_SEATS, 2 * Math.ceil((n || 0) / 2)));
+}
+/** Desk top length for a desk with `seats` seats. */
+export function deskWidth(seats = BASE_SEATS) {
+  return DESK_BASE_W + extraPairs(seats) * SEAT_W;
+}
+const extraPairs = (seats) => (podSeats(seats) - BASE_SEATS) / 2;
+/** Floor footprint (x) of a pod whose desk has `seats` seats. */
+export function podWidth(seats = BASE_SEATS) {
+  return POD_W + extraPairs(seats) * SEAT_W;
+}
+
+/**
+ * Room size for `nPods` worktree slots. `seats[i]` is pod i's desk size (default 6); pods are laid out in rows of
+ * `cols`, each row left to right at its pods' own widths, and `slots[i]` holds each pod's centre.
+ */
+export function roomSize(nPods, seats = []) {
   const n = Math.max(1, nPods);
   const cols = Math.min(3, Math.max(2, n));
   const rows = Math.ceil(n / cols);
-  return { w: cols * POD_W + 2 * MARGIN, d: rows * POD_D + MARGIN + FRONT, cols, rows };
+  const slots = [];
+  let inner = cols * POD_W;
+  for (let r = 0; r < rows; r++) {
+    let x = MARGIN;
+    for (let c = 0; c < cols && r * cols + c < n; c++) {
+      const pw = podWidth(seats[r * cols + c]);
+      slots.push({ x: x + pw / 2, z: MARGIN + r * POD_D + POD_D / 2, seats: podSeats(seats[r * cols + c]) });
+      x += pw;
+    }
+    inner = Math.max(inner, x - MARGIN);
+  }
+  return { w: inner + 2 * MARGIN, d: rows * POD_D + MARGIN + FRONT, cols, rows, slots };
 }
 
 export function podPosition(i, size) {
+  if (size.slots?.[i]) return { x: size.slots[i].x, z: size.slots[i].z };
   const c = i % size.cols;
   const r = Math.floor(i / size.cols);
   return { x: MARGIN + c * POD_W + POD_W / 2, z: MARGIN + r * POD_D + POD_D / 2 };
+}
+
+/** Seat layout for a desk with `seats` seats: x offset along the desk, side -1 (back, faces +z) or +1 (front). */
+export function seatLayout(seats = BASE_SEATS) {
+  const per = podSeats(seats) / 2;
+  const out = [];
+  for (const side of [-1, 1]) for (let k = 0; k < per; k++) out.push({ x: (k - (per - 1) / 2) * SEAT_W, side });
+  return out;
 }
 
 /** Wall-mounted boards (centre `along`, `width`) per wall — windows and decor keep clear of them. */
