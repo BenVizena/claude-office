@@ -177,6 +177,12 @@ async function reopen(slug, it, note, log) {
   } catch { /* best effort */ }
 }
 
+/** A step that finished cleanly: close its session's terminal (its turn is over; the transcript stays). Best effort. */
+async function closeStep(ctx, step) {
+  if (!ctx.closeSession || !step.session) return;
+  try { await ctx.closeSession(step.session); } catch { /* a window left open is harmless */ }
+}
+
 /** One active step: 'working' | 'waiting' | 'done' | { fail: reason } (removes nothing itself). */
 async function processStep(slug, board, run, step, ctx, now) {
   const it = board.items.find((x) => x.id === step.id);
@@ -233,12 +239,14 @@ async function processStep(slug, board, run, step, ctx, now) {
           return { fail: `the check for "${it.text}" failed on the merged result in ${run.worktree} (exit ${res.code ?? '?'}): ${where}` };
         }
       }
+      // its terminal still sits in the worktree (on Windows that alone keeps the folder from being removed)
+      await closeStep(ctx, step);
       const rm = await g.removeStepWorktree(run.worktree, step.worktree, step.branch);
       await patchRun(slug, run.id, (r, b) => {
         logLine(r, `merged ${step.branch} into ${step.baseBranch || 'the base'}${rm.ok ? '' : ` (${rm.error})`}`);
         if (rm.leftover) b.leftovers = [...new Set([...(b.leftovers || []), JSON.stringify([run.worktree, step.worktree])])];
       });
-    }
+    } else await closeStep(ctx, step);
     return 'done';
   }
   if (it.status === 'blocked') return { fail: `"${it.text}" was marked blocked${it.note ? `: ${it.note}` : ''}` };
@@ -251,7 +259,7 @@ async function processStep(slug, board, run, step, ctx, now) {
 /**
  * One round of the runner for one board: each of its running sequences in turn. ctx: { hookOf(session),
  * launch({ slug, id, worktree, step, max, run, git }) -> { session }, runCheck(cmd, cwd), git (gitwork.js),
- * notify(session, { text, needsYou }), canLaunch?(run) -> reason|null, autoApproveChecks?() -> bool, now? }. Returns what it did (for tests and
+ * notify(session, { text, needsYou }), closeSession?(session) (a cleanly finished step's terminal), canLaunch?(run) -> reason|null, autoApproveChecks?() -> bool, now? }. Returns what it did (for tests and
  * logs): 'idle' with none running, what the one did, or a list with several. Callers make sure two ticks for one board
  * never overlap.
  */

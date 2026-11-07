@@ -56,6 +56,9 @@ const DEFAULT_SETTINGS = {
   // run the check commands sessions set without the user approving each one (they still see them on the board).
   // The office runs checks outside Claude Code's permission prompts, so this trusts every session's commands.
   autoApproveChecks: false,
+  // close the terminal window of a sequence step once it is done, checked and merged (its turn is over). Steps that
+  // fail or stop keep theirs open, so the user can talk to the session.
+  closeFinishedSteps: true,
 };
 
 /** First existing file among candidates, else null. */

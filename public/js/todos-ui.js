@@ -160,6 +160,8 @@ export function boardSettingsHtml(settings = {}) {
       <span class="${mode === 'bypassPermissions' ? 'td-warn' : ''}">${esc((LAUNCH_MODES[mode] || LAUNCH_MODES[''])[1])}</span>
       <label title="A check is a command that proves an item is done (npm test, say). The office runs it before anything that depends on the item starts in a sequence, outside Claude Code's permission prompts. Your own checks never need approval.">
         <input type="checkbox" data-auto-checks ${settings.autoApproveChecks ? 'checked' : ''} /> run checks sessions set without asking me</label>
+      <label title="Once a sequence step is done (checked and merged), the office closes its terminal window. Steps that fail or stop keep theirs open. The transcript is kept either way.">
+        <input type="checkbox" data-close-steps ${settings.closeFinishedSteps !== false ? 'checked' : ''} /> close finished steps' terminals</label>
     </div>`;
 }
 
