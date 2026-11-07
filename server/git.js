@@ -28,8 +28,27 @@ export async function resolveRoot(cwd) {
       value = { root: path.resolve(root), worktree: path.resolve(top), isGit: true, exists: true };
     }
   }
+  // a worktree under <repo>/.claude/worktrees/ that has been removed (a merged sequence step, say) still belongs to
+  // that repo: its sessions stay in the repo's room, on a "removed" desk, rather than becoming a room of their own
+  const nested = !value.isGit && nestedWorktree(cwd);
+  if (nested) {
+    const parent = await resolveRoot(nested.parent);
+    if (parent.isGit) value = { root: parent.root, worktree: nested.worktree, isGit: true, exists: value.exists };
+  }
   rootCache.set(cwd, { at: Date.now(), value });
   return value;
+}
+
+/** `<parent>/.claude/worktrees/<name>[/...]` -> { parent, worktree: <parent>/.claude/worktrees/<name> }, else null. */
+export function nestedWorktree(p) {
+  const m = /^(.*?)[\\/]\.claude[\\/]worktrees[\\/]([^\\/]+)/.exec(path.resolve(p));
+  return m && m[1] ? { parent: m[1], worktree: path.join(m[1], '.claude', 'worktrees', m[2]), name: m[2] } : null;
+}
+
+/** A Claude Office sequence step's worktree folder name (gitwork.js createStepWorktree) -> its item id, else null. */
+export function stepItemId(p) {
+  const m = /^office-([0-9a-z]+)-[0-9a-z]+$/i.exec(path.basename(p || ''));
+  return m ? m[1] : null;
 }
 
 /** Worktrees, branches and status for a repository root. */
