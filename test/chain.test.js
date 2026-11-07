@@ -330,6 +330,53 @@ describe('parallel runs', () => {
     assert.equal(await tick(s, o.ctx), 'idle');
   });
 
+  for (const style of ['squash', 'rebase']) {
+    test(`mergeStyle ${style}: parallel steps land without merge commits`, async () => {
+      const base = repo();
+      const s = fresh();
+      const a = add(s, 'A'), b = add(s, 'B');
+      const root = add(s, 'root');
+      addDependency(s, a.id, root.id, { by: 't' }); addDependency(s, b.id, root.id, { by: 't' });
+      updateItem(s, root.id, { status: 'done', by: 't' });
+      const o = parallelOffice(s, base);
+      o.ctx.mergeStyle = () => style;
+      startRun(s, { root: root.id, worktree: base, parallel: 2 });
+      await tick(s, o.ctx);
+      o.work(a.id, 'a.txt');
+      o.work(b.id, 'b.txt');
+      assert.equal(await tick(s, o.ctx), 'finished');
+      for (const x of ['a.txt', 'b.txt']) assert.ok(fs.existsSync(path.join(base, x)), `${x} landed in the base`);
+      assert.equal(gitIn(base, 'rev-list', '--merges', '--count', 'HEAD'), '0', 'no merge commits');
+      const log = gitIn(base, 'log', '--format=%s');
+      if (style === 'squash') assert.match(log, /^[AB] \(Claude Office sequence, office\/.*\n[AB] \(Claude Office sequence/);
+      else assert.match(log, /^work .*\nwork /, "the steps' own commits, replayed");
+      assert.equal(gitIn(base, 'branch', '--list', 'office/*'), '', 'step branches deleted');
+      assert.equal(gitIn(base, 'worktree', 'list').split('\n').length, 1, 'no step worktrees left');
+    });
+  }
+
+  test('mergeStyle rebase: a conflict aborts the rebase and keeps the step branch as it was', async () => {
+    const base = repo();
+    const s = fresh();
+    const a = add(s, 'A'), b = add(s, 'B');
+    const root = add(s, 'root');
+    addDependency(s, a.id, root.id, { by: 't' }); addDependency(s, b.id, root.id, { by: 't' });
+    updateItem(s, root.id, { status: 'done', by: 't' });
+    const o = parallelOffice(s, base);
+    o.ctx.mergeStyle = () => 'rebase';
+    startRun(s, { root: root.id, worktree: base, parallel: 2 });
+    await tick(s, o.ctx);
+    const bStep = runOf(s).active.find((x) => x.id === b.id);
+    o.work(a.id, 'same.txt', 'from A\n');
+    o.work(b.id, 'same.txt', 'from B\n');
+    const bHead = await gitwork.headOf(bStep.worktree);
+    assert.equal(await tick(s, o.ctx), 'stopped');
+    assert.match(get(s, b.id).note, /rebasing it conflicted/);
+    assert.equal(await gitwork.headOf(bStep.worktree), bHead, 'the rebase was aborted');
+    assert.deepEqual(await gitwork.dirtyFiles(bStep.worktree), []);
+    assert.deepEqual(await gitwork.dirtyFiles(base), []);
+  });
+
   test('branches that each pass but break once merged: the merge is taken back and the run stops', async () => {
     const base = repo();
     fs.writeFileSync(path.join(base, 'lib.js'), 'exports.foo = () => 1;\n');

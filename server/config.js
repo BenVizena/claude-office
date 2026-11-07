@@ -56,6 +56,9 @@ const DEFAULT_SETTINGS = {
   // run the check commands sessions set without the user approving each one (they still see them on the board).
   // The office runs checks outside Claude Code's permission prompts, so this trusts every session's commands.
   autoApproveChecks: false,
+  // how a parallel step's branch lands in the base worktree: 'merge' (a merge commit per step), 'squash' (one plain
+  // commit per step, no merge commit) or 'rebase' (its commits replayed onto the base: linear history). MERGE_STYLES.
+  mergeStyle: 'merge',
 };
 
 /** First existing file among candidates, else null. */
