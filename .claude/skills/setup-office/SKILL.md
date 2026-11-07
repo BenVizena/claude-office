@@ -12,7 +12,7 @@ the parts are, so explain each step in a sentence before running it. Don't paste
 
 Run `node --version` and `git --version`.
 
-- Node.js must be 20 or newer. If it's missing or older, stop: tell them to install the current LTS from
+- Node.js must be 22 or newer. If it's missing or older, stop: tell them to install the current LTS from
   https://nodejs.org (or `winget install OpenJS.NodeJS.LTS` on Windows, `brew install node` on macOS) and run
   /setup-office again in a new terminal.
 - git missing: same, from https://git-scm.com.

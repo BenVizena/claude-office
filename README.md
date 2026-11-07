@@ -108,7 +108,7 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
 
 ## Requirements
 
-- **Node.js 20+** and **git** on your PATH
+- **Node.js 22+** and **git** on your PATH
 - **Claude Code**, signed in. The office reads its transcripts, and the in-office agents run `claude -p`.
 - *Optional:* **Blender**, only needed when the designer models new furniture. You can install it any time; the
   office picks it up without a restart.
@@ -222,7 +222,7 @@ are not stored locally, so they aren't on the board.
 npm test
 ```
 
-Runs the suite in `test/` with Node's built-in test runner (no extra dependencies; needs Node 21+ for the file glob).
+Runs the suite in `test/` with Node's built-in test runner (no extra dependencies).
 It covers the to-do boards, board news, results, transcript scanning and status, pricing, the office layout math,
 the `office-todo` CLI end to end, and the hook. Each test file points the home directory at a temporary folder
 (`test/helpers/home.js`) and deletes it afterwards, so tests never touch your real `~/.claude` data, and they don't
