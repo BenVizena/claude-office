@@ -97,6 +97,31 @@ describe('office-todo board commands', () => {
     ok(['add', 'Office-wide', '--global']);
     assert.ok(readBoard('office').items.some((x) => x.text === 'Office-wide'));
   });
+
+  test('an id from another board says where it is; --board reaches it', () => {
+    const dir = fs.mkdtempSync(path.join(TEST_HOME, 'elsewhere-'));
+    const first = run(['add', 'Lives elsewhere'], { cwd: dir });
+    assert.equal(first.code, 0);
+    assert.match(first.err, /started a new board .* pass --board/, 'a write to a brand-new cwd board says which board it made');
+    assert.doesNotMatch(run(['add', 'Second'], { cwd: dir }).err, /new board/, 'only the first write to it');
+    assert.doesNotMatch(run(b('add', 'Explicit')).err, /new board/, 'not when the board was named');
+    const slug = projectSlug(dir);
+    const it = readBoard(slug).items.find((x) => x.text === 'Lives elsewhere');
+
+    const miss = run(b('show', it.id));
+    assert.equal(miss.code, 1);
+    assert.match(miss.err, new RegExp(`no item ${it.id} on board ${BOARD}`));
+    assert.match(miss.err, new RegExp(`"Lives elsewhere" is on board .*${slug}.*pass --board ${slug}`));
+    assert.match(run(b('done', it.id.slice(0, 4))).err, new RegExp(`pass --board ${slug}`), 'prefixes and server-side errors too');
+    assert.match(run(b('show', 'abcdef01')).err, /isn't on any other board either/);
+
+    assert.match(ok(['show', it.id, '--board', slug]), /Lives elsewhere/);
+    assert.match(ok(['context', it.id, 'found it', '--board', slug]), new RegExp(`on board ${slug}`));
+    assert.equal(readBoard(slug).items.find((x) => x.id === it.id).status, 'todo');
+    assert.match(run(['list', '--board', 'no-such-board']).err, /there is no board no-such-board/);
+    assert.match(run(['list', '--board', 'Bad Id']).err, /--board takes a board id/);
+    assert.match(ok(['list', '--board', 'global']), /Board: /);
+  });
 });
 
 describe('office-todo status and results', () => {

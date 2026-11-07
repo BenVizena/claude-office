@@ -28,7 +28,9 @@
 //   following                         the items this session follows
 //   wait                              run in the background: exits when an item you follow is unblocked, finished by
 //                                     someone else or your claim is taken over, printing what happened
-// Flags: --project <path|board-id>  --global (office-wide board)  --json  --by "<who>"
+// Flags: --board <board-id>  --project <path|board-id>  --global (office-wide board)  --json  --by "<who>"
+// The board comes from the git root of the current directory (worktrees share their main repo's board). An id that
+// isn't on that board is looked up on the others, and the error says where it is and how to reach it (--board).
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -92,10 +94,43 @@ function repoRoot(dir) {
 
 function target() {
   if (flags.global) return { slug: GLOBAL_BOARD, meta: { name: 'Whole office' } };
+  if ("board" in flags) {
+    const s = String(flags.board ?? "").trim().toLowerCase();
+    if (s === 'global' || s === GLOBAL_BOARD) return { slug: GLOBAL_BOARD, meta: { name: 'Whole office' }, explicit: true };
+    if (!/^[a-z0-9-]+$/.test(s)) throw new Error(`--board takes a board id like ${projectSlug(process.cwd())} (\`office-todo boards\` lists them)`);
+    if (!listBoards().some((x) => x.id === s)) throw new Error(`there is no board ${s} (\`office-todo boards\` lists them)`);
+    return { slug: s, meta: null, explicit: true };
+  }
   const p = flags.project;
   if (p && /^[a-z0-9-]+$/.test(p) && !fs.existsSync(p)) return { slug: p, meta: null };
   const root = repoRoot(p || process.cwd());
-  return { slug: projectSlug(root), meta: { name: path.basename(root), root } };
+  return { slug: projectSlug(root), meta: { name: path.basename(root), root }, explicit: !!p };
+}
+
+const boardLabel = (b) => `"${b.name || b.id}" (${b.id}${b.root ? `, ${b.root}` : ''})`;
+
+/** Where else an item id lives, for "no item <id>" errors: the board picked from the cwd is often just the wrong one. */
+function whereElse(id, slug) {
+  let found = [];
+  try {
+    found = listBoards().filter((b) => b.id !== slug).map((b) => [b, b.items.filter((x) => x.id === id || x.id.startsWith(id))])
+      .filter(([, its]) => its.length);
+  } catch { return ''; }
+  if (!found.length) return `
+It isn't on any other board either (\`office-todo boards\` lists them; \`list --all\` shows done items).`;
+  return found.map(([b, its]) => {
+    const how = b.id === GLOBAL_BOARD ? 'pass --global' : `${b.root ? `run from ${b.root} or ` : ''}pass --board ${b.id}`;
+    return `
+${its.length === 1 ? `${its[0].id} "${its[0].text}"` : `${its.length} items starting ${id}`} ${its.length === 1 ? 'is' : 'are'} on board ${boardLabel(b)}: ${how}`;
+  }).join('');
+}
+
+/** Writes from a cwd-derived board that didn't exist yet (a scratch dir, another repo) probably meant another board. */
+function newBoardNote(slug, meta, explicit) {
+  if (explicit || slug === GLOBAL_BOARD) return;
+  let exists = true;
+  try { exists = listBoards().some((x) => x.id === slug && x.items.length); } catch { /* can't tell: say nothing */ }
+  if (!exists) console.error(`note: started a new board ${boardLabel({ id: slug, ...meta })} for this directory. If you meant another project's board, pass --board <id> (\`office-todo boards\` lists them).`);
 }
 
 /** After a request the office may start: 'started' once it runs, 'gone' if it was dropped, 'pending' after ~15 s. */
@@ -287,7 +322,7 @@ function results(slug, args) {
 
 const [cmd = 'list', ...rest] = pos;
 try {
-  const { slug, meta } = target();
+  var { slug, meta, explicit } = target();
   const id = rest[0];
   const need = () => { if (!id) throw new Error(`usage: office-todo ${cmd} <id>`); };
   switch (cmd) {
@@ -321,6 +356,7 @@ try {
       }
       break;
     case 'add': {
+      newBoardNote(slug, meta, explicit);
       const r = addItem(slug, meta, { text: rest.join(' '), by, session, priority: flags.priority || 'normal', parent: flags.parent, summary: flags.summary });
       follow(slug, r.id, 'created');
       print(r);
@@ -348,7 +384,7 @@ try {
       if (!session) throw new Error('watching needs a Claude Code session (run it from inside Claude Code)');
       const b = readBoard(slug);
       const it = b.items.find((x) => x.id === id) || b.items.find((x) => x.id.startsWith(id));
-      if (!it) throw new Error(`no item ${id}`);
+      if (!it) throw new Error(`no item ${id} on board ${slug}`);
       if (cmd === 'watch') {
         if (it.status === 'done') throw new Error(`"${it.text}" is already done`);
         subscribe(session, b, it.id, 'watch');
@@ -378,14 +414,14 @@ try {
       else if (flags.file) text = fs.readFileSync(flags.file, 'utf8');
       const kind = flags.kind || (flags.lang ? 'code' : 'explanation');
       const r = addDetail(slug, id, { by, session, kind, title: flags.title, lang: flags.lang, text });
-      console.log(`added ${kind} to "${r.text}" (${r.details} background entr${r.details === 1 ? 'y' : 'ies'})${r.truncated ? ' — it was long, so the middle was trimmed' : ''}`);
+      console.log(`added ${kind} to "${r.text}" on board ${slug} (${r.details} background entr${r.details === 1 ? 'y' : 'ies'})${r.truncated ? ' — it was long, so the middle was trimmed' : ''}`);
       break;
     }
     case 'show': {
       need();
       const b = readBoard(slug);
       const it = b.items.find((x) => x.id === id) || b.items.find((x) => x.id.startsWith(id));
-      if (!it) throw new Error(`no item ${id}`);
+      if (!it) throw new Error(`no item ${id} on board ${slug}`);
       const det = readDetails(slug, it.id);
       const next = dependents(b, it);
       if (flags.json) { print({ ...it, subtasks: children(b, it.id), neededBy: next.map((x) => x.id), background: det }); break; }
@@ -410,7 +446,7 @@ ${d.text}`);
       const cmdText = flags.clear ? '' : rest.slice(1).join(' ');
       if (!cmdText && !flags.clear) {
         const it = readBoard(slug).items.find((x) => x.id === id || x.id.startsWith(id));
-        if (!it) throw new Error(`no item ${id}`);
+        if (!it) throw new Error(`no item ${id} on board ${slug}`);
         console.log(it.check ? `${it.check.cmd}${unapprovedNote(it.check, '  (not approved by the user yet)')}` : 'no check (set one: office-todo check <id> "npm test")');
         break;
       }
@@ -483,6 +519,7 @@ ${d.text}`);
       console.error(`unknown command: ${cmd}`); process.exit(2);
   }
 } catch (e) {
-  console.error(`office-todo: ${e.message}`);
+  const missing = /^no item (\S+) on board/.exec(e.message);
+  console.error(`office-todo: ${e.message}${missing ? whereElse(missing[1], slug) : ''}`);
   process.exit(1);
 }

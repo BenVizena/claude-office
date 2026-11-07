@@ -21,7 +21,8 @@ process.on('exit', () => { try { fs.rmSync(TEST_HOME, { recursive: true, force: 
 
 /** Env for child processes (the CLI) that keeps them inside the temp home. */
 export function childEnv(extra = {}) {
-  const env = { ...process.env, HOME: TEST_HOME, USERPROFILE: TEST_HOME, ...extra };
+  // a run marker inherited from the session running the tests (a sequence step) would change what the CLI allows
+  const env = { ...process.env, CLAUDE_OFFICE_RUN: undefined, HOME: TEST_HOME, USERPROFILE: TEST_HOME, ...extra };
   for (const [k, v] of Object.entries(env)) if (v === undefined) delete env[k];
   return env;
 }

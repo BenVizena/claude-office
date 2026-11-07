@@ -102,8 +102,13 @@ ${T} following                     # what you follow, and news not delivered yet
 ${T} wait                          # run in the BACKGROUND: finishes when an item you follow changes
 \`\`\`
 
-Flags: \`--global\` for the office-wide board, \`--project <path>\` for another project, \`--json\` for
-machine-readable output, \`--by "<short label>"\` to describe yourself (e.g. "claude: auth refactor").
+Flags: \`--global\` for the office-wide board, \`--board <board id>\` or \`--project <path>\` for another project's
+board (\`${T} boards\` lists them), \`--json\` for machine-readable output, \`--by "<short label>"\` to describe
+yourself (e.g. "claude: auth refactor").
+
+The board comes from the git root of your current directory, so from a scratch dir or another repo you are on a
+different board: an id "isn't found" there, and the error says which board has it and the \`--board\` to pass.
+When a write starts a new board for your directory, the CLI says so: if that wasn't meant, use \`--board\`.
 
 ## How to work with the board
 - **Several tasks at once? Put them on the board first.** When the user hands you a list (review findings to fix,
