@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { classifyRole, contextWindow, inferStatus } from './scanner.js';
-import { resolveRoot, repoInfo } from './git.js';
+import { resolveRoot, repoInfo, nestedWorktree, stepItemId } from './git.js';
 import { normPath, projectSlug, isStaffPath, CLAUDE_DIR, OFFICE_DIR, readJson, writeJsonAtomic } from './config.js';
 
 const ROOM_SIZES_FILE = path.join(OFFICE_DIR, 'room-sizes.json');
@@ -80,10 +80,12 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
 
     for (const { s, worktree, background } of p.sessions) {
       const cwd = normPath(s.cwd);
+      const wk = normPath(worktree);
       let best = null;
       for (const pod of pods) if ((cwd === pod.key || cwd.startsWith(pod.key + '/')) && (!best || pod.key.length > best.key.length)) best = pod;
+      // a removed worktree nested in a live one (.claude/worktrees/...) is its own (removed) desk, not the outer one's
+      if (best && wk !== best.key && wk.startsWith(best.key + '/') && nestedWorktree(worktree)) best = null;
       if (!best) {
-        const wk = normPath(worktree);
         best = pods.find((x) => x.key === wk);
         if (!best) {
           best = { key: wk, path: worktree, branch: s.gitBranch, isMain: false, dirty: 0, lastCommit: 0, removed: true, sessions: [] };
@@ -102,11 +104,15 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
       // only keep recent sessions on the floor/boards
       pod.sessions = pod.sessions.filter((x) => now - x.lastActivity < settings.sessionMaxAgeDays * DAY);
     }
-    // removed worktrees with nothing recent are dropped
-    pods = pods.filter((x) => !x.removed || x.sessions.length);
-    pods.sort((a, b) => (b.isMain - a.isMain) || (a.removed - b.removed) || a.path.localeCompare(b.path));
-
     if (now - lastActivity > settings.roomMaxAgeDays * DAY && !pinned.has(key)) continue;
+
+    const slug = projectSlug(p.root);
+    const board = readBoard(slug);
+    markSteps(pods, board);
+    // removed worktrees with nothing recent are dropped; a sequence step's is gone as soon as nobody there is busy
+    // (the office removes it after merging, so its sessions have finished)
+    pods = pods.filter((x) => !x.removed || (x.step ? x.sessions.some((s) => s.status === 'working' || s.status === 'needs_you') : x.sessions.length));
+    pods.sort((a, b) => (b.isMain - a.isMain) || (a.removed - b.removed) || (!!a.step - !!b.step) || a.path.localeCompare(b.path));
 
     // recent commits across every worktree (deduped; a commit belongs to the first branch it was seen on)
     const seenHash = new Set();
@@ -118,8 +124,6 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
     }
     recentCommits.sort((a, b) => b.at - a.at);
 
-    const slug = projectSlug(p.root);
-    const board = readBoard(slug);
     const usedBranches = new Set(pods.map((x) => x.branch).filter(Boolean));
     for (const pod of pods) pod.seats = stickySeats(pod.key, pod.sessions.filter((x) => x.status !== 'gone').length, now);
     const size = roomSize(stickyPodCount(slug, pods.length, now), pods.map((x) => x.seats));
@@ -152,6 +156,22 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
     catalog: catalog.publicList(),
     staff: staff.publicState(),
   };
+}
+
+/**
+ * Tag the desks of sequence step worktrees (.claude/worktrees/office-<item>-<stamp>) with pod.step = { id, text, phase,
+ * run }: from the board's active run steps, else from the folder name (a step kept after a failed check or a stopped run).
+ */
+export function markSteps(pods, board) {
+  const active = new Map();
+  for (const r of board.runs || []) for (const st of r.active || []) if (st.worktree) active.set(normPath(st.worktree), { run: r.id, st });
+  for (const pod of pods) {
+    const hit = active.get(pod.key);
+    const id = hit?.st.id || stepItemId(pod.path);
+    if (!id || !nestedWorktree(pod.path)) continue;
+    const it = (board.items || []).find((x) => x.id === id);
+    pod.step = { id, text: hit?.st.text || it?.text || null, phase: hit ? hit.st.phase : pod.removed ? 'merged' : 'kept', run: hit?.run || null };
+  }
 }
 
 /** Attach the agent's own status line; an unanswered --needs-you question makes it "needs you". */
