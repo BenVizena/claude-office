@@ -100,6 +100,7 @@ ${T} block <id> "why it's blocked"
 ${T} run <id> [--max N] [--parallel N]  # run the item and what waits on it, a fresh session per item (see Sequences)
 ${T} mine                          # what you have claimed
 ${T} completed [--days 7]          # recently finished
+${T} review [--days 14]             # tidy-up pass: open items that have probably drifted (lists only)
 ${T} watch <id> | unwatch <id>     # follow an item's news (items you claim or add are followed automatically)
 ${T} following                     # what you follow, and news not delivered yet
 ${T} wait                          # run in the BACKGROUND: finishes when an item you follow changes
@@ -149,6 +150,11 @@ When a write starts a new board for your directory, the CLI says so: if that was
   asks for was done elsewhere, a plan changed, a line number moved — don't append a contradicting note: write the
   correction with \`context <id> --replaces <n> "..."\`, or \`context <id> --retire <n> "why"\` if nothing replaces
   it. Retired entries stay in the history (\`show <id> --all\`); nothing is ever deleted.
+- **Tidy-up pass** (when asked to tidy the board, or what's left looks wrong): \`review\` lists open items untouched
+  for 14 days, parents whose subtasks are all done, notes naming commits merged since or branches that are gone,
+  and claims held by ended sessions. It never changes anything. Unless the user asked you to tidy up, show them the
+  list and let them decide; for each: \`done\`, \`block <id> "why"\`, \`release\`, \`context --retire <n>\` for a stale
+  note, or \`review --keep <id>\` to leave it as it is (hidden until the item changes again).
 - **Titles are short and imperative; the summary is one line of context** (why it matters / where it stands) that
   the user sees under the title (over 200 characters it is shortened and the full text kept as background). Fix unclear titles, stale summaries or wrong priorities with \`edit\`.
 - **Leave background only when it helps the user understand** — the root cause you found, the key error log,
