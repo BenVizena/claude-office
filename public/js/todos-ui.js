@@ -167,6 +167,8 @@ export function boardSettingsHtml(settings = {}) {
         <input type="checkbox" data-auto-checks ${settings.autoApproveChecks ? 'checked' : ''} /> run checks sessions set without asking me</label>
       <label title="How a finished step of a parallel sequence lands in the chosen worktree. Merge: a merge commit per step, its commits kept under it. Squash: one plain commit per step (its own commits are dropped). Rebase: its commits replayed on top, linear history, no merge commit.">Parallel steps land as:
         <select data-merge-style>${Object.entries(MERGE_STYLES).map(([k, l]) => `<option value="${k}" ${k === (settings.mergeStyle || 'merge') ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label title="Once a sequence step is done (checked and merged), the office closes its terminal window. Steps that fail or stop keep theirs open. The transcript is kept either way.">
+        <input type="checkbox" data-close-steps ${settings.closeFinishedSteps !== false ? 'checked' : ''} /> close finished steps' terminals</label>
     </div>`;
 }
 

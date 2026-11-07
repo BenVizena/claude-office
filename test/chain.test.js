@@ -22,7 +22,7 @@ const add = (slug, text, extra = {}) => addItem(slug, { name: 'P', root: TEST_HO
 /** A fake office: launches claim the item; hooks/checks are whatever the test sets. */
 function office(slug) {
   const o = {
-    launched: [], hooks: new Map(), checks: [], checkResult: { ok: true, code: 0, output: 'fine', ms: 1 }, notified: [],
+    launched: [], closed: [], hooks: new Map(), checks: [], checkResult: { ok: true, code: 0, output: 'fine', ms: 1 }, notified: [],
     ctx: {
       hookOf: (s) => o.hooks.get(s),
       launch: async ({ id, step, max }) => {
@@ -33,6 +33,7 @@ function office(slug) {
       },
       runCheck: async (cmd, cwd) => { o.checks.push({ cmd, cwd }); return o.checkResult; },
       notify: (session, st) => o.notified.push({ session, ...st }),
+      closeSession: async (session) => { o.closed.push(session); },
     },
     /** the worker marks its item done and its turn ends */
     finish(id) {
@@ -76,6 +77,7 @@ describe('running a sequence', () => {
     updateItem(s, a.id, { status: 'done', by: 'worker' });
     o.hooks.set('sess-1', { event: 'UserPromptSubmit', at: Date.now() - 1000 });
     assert.equal(await tick(s, o.ctx), 'waiting for its turn to end');
+    assert.deepEqual(o.closed, [], 'its terminal stays open while its turn runs');
     o.hooks.set('sess-1', { event: 'Stop', at: Date.now() + 1 });
     assert.equal(await tick(s, o.ctx), 'launched');
     assert.equal(o.launched[1].id, b.id);
@@ -86,6 +88,7 @@ describe('running a sequence', () => {
     const run = runOf(s);
     assert.equal(run.stopped.ok, true);
     assert.match(run.stopped.reason, /all 2 steps done/);
+    assert.deepEqual(o.closed, ['sess-1', 'sess-2'], 'the terminal of each finished step is closed');
     assert.equal(o.notified.at(-1).needsYou, undefined, 'a clean finish does not ask for the user');
     assert.equal(await tick(s, o.ctx), 'idle');
     stopRun(s); // clears the finished run
@@ -137,6 +140,7 @@ describe('running a sequence', () => {
     assert.equal(await tick(s, o.ctx), 'stopped');
     assert.equal(o.checks[0].cmd, 'npm test');
     assert.equal(o.checks[0].cwd, TEST_HOME, 'runs in the board root when the item has no launch worktree');
+    assert.deepEqual(o.closed, [], 'a failed step keeps its terminal for the user');
     assert.equal(get(s, a.id).status, 'doing');
     assert.equal(get(s, a.id).check.last.ok, false);
     assert.equal(get(s, b.id).status, 'blocked', 'what waits on it is blocked again');

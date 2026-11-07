@@ -567,6 +567,7 @@ export class UI {
       return;
     }
     if (t.dataset.mergeStyle !== undefined) { try { await api('/api/settings', { mergeStyle: t.value }); } catch (err) { alert(err.message); } return; }
+    if (t.dataset.closeSteps !== undefined) { try { await api('/api/settings', { closeFinishedSteps: t.checked }); } catch (err) { alert(err.message); } return; }
     if (t.dataset.launchMode !== undefined) {
       if (t.value === 'bypassPermissions' && !confirm('Sessions the office starts will run every edit and command without asking you. Use this only in projects where that is safe. Continue?')) { this.render(false); return; }
       try { await api('/api/settings', { launchPermissionMode: t.value }); } catch (err) { alert(err.message); }
