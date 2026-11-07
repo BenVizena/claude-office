@@ -3,7 +3,8 @@
 //
 // Item: { id, text, status: todo|doing|blocked|done, priority, parent?, order?, blockedBy?: [ids], by, bySession?,
 //         claim?: { by, session, at, ended?, pending? }, createdAt, updatedAt, completedAt?, completedBy?, note?,
-//         check?: { cmd, by, at, approved, last?: { ok, code, ms, at } }, launch?: { session, worktree, at } }
+//         check?: { cmd, by, at, approved, last?: { ok, code, ms, at } }, launch?: { session, worktree, at },
+//         reviewed?: { by, session?, at } }  (kept by a tidy-up review: its flags stay hidden until updatedAt passes at)
 // parent makes a subtask tree; blockedBy are dependencies ("can't start until those are done") across the board.
 // order sorts siblings once someone has arranged them by hand.
 import fs from 'node:fs';
@@ -235,6 +236,15 @@ export function releaseItem(slug, id, { by }) {
     syncBlocked(b);
     it.updatedAt = Date.now();
     it.updatedBy = by;
+    return { ...it };
+  });
+}
+
+/** Tidy-up review said "keep it as it is": its review flags stay hidden until the item changes again. Doesn't touch updatedAt. */
+export function markReviewed(slug, id, { by = 'you', session }) {
+  return mutate(slug, null, (b) => {
+    const it = find(b, id);
+    it.reviewed = { by, ...(session ? { session } : {}), at: Math.max(Date.now(), it.updatedAt || 0) };
     return { ...it };
   });
 }

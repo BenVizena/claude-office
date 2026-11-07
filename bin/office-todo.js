@@ -26,6 +26,10 @@
 //   mine                              items claimed by this session
 //   completed [--days N]              recently completed items, newest first
 //   boards                            every board with open counts
+//   review [--days N] [--all]         tidy-up pass: open items that have probably drifted (untouched N days (14),
+//                                     subtasks all done, notes naming merged commits / gone branches, ended claims)
+//                                     — it only lists them; decide each: done / block / release / context --retire
+//   review --keep <id>                "leave it as it is": hides its flags until the item changes again
 //   results ...                       charts/tables/images/notes the user can view in the office
 //                                     (`office-todo results help` for the subcommands)
 //   watch <id> | unwatch <id>         follow an item's news (claimed and added items are followed automatically)
@@ -40,10 +44,11 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { projectSlug, loadSettings } from '../server/config.js';
 import { requestRun, runsOf } from '../server/chain.js';
+import { reviewBoard, gitResolver, suggestions, STALE_DAYS } from '../server/review.js';
 import { sessionRunPolicy } from '../server/runpolicy.js';
 import { setStatus, clearStatus, readStatus } from '../server/status.js';
 import {
-  readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, retireDetail, liveDetails, moveItem, addDependency, removeDependency, setChain, openBlockers, claimIsStale, dependents, setCheck,
+  readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, retireDetail, liveDetails, moveItem, addDependency, removeDependency, setChain, openBlockers, claimIsStale, dependents, setCheck, markReviewed,
 } from '../server/todos.js';
 import { subscribe, unsubscribe, scan, markShown, subCount, watcherBeat, WATCHER_BEAT_MS } from '../server/news.js';
 import {
@@ -359,6 +364,30 @@ try {
         console.log(`${b.id.padEnd(32)} ${String(open).padStart(3)} open ${String(claimed).padStart(3)} claimed   ${b.name || ''}`);
       }
       break;
+    case 'review': {
+      if (flags.keep) {
+        const r = markReviewed(slug, flags.keep, { by, session });
+        console.log(`kept "${r.text}" as it is — the review won't flag it again until it changes`);
+        break;
+      }
+      const days = flags.days !== undefined ? Number(flags.days) : STALE_DAYS;
+      if (!(days >= 0)) throw new Error('--days takes a number of days');
+      const b = readBoard(slug);
+      const git = gitResolver(b.root || meta?.root);
+      const found = reviewBoard(b, { details: (iid) => readDetails(slug, iid, { live: true }), git, days, all: !!flags.all });
+      if (flags.json) { print(found.map(({ item, flags: f }) => ({ id: item.id, text: item.text, status: item.status, flags: f, suggest: suggestions(item, f) }))); break; }
+      const open = b.items.filter((i) => i.status !== 'done').length;
+      console.log(`Tidy-up review of ${b.name || slug} (${slug}): ${found.length} of ${open} open item${open === 1 ? '' : 's'} flagged${git ? '' : ' (no git repo found for this board, so commit/branch mentions were not checked)'}`);
+      if (!found.length) { console.log('Nothing looks drifted.'); break; }
+      for (const { item, flags: f } of found) {
+        console.log(`\n${line(item, b)}`);
+        for (const x of f) console.log(`      ⚑ ${x.entry ? `background #${x.entry}: ` : ''}${x.why}`);
+        console.log(`      → ${suggestions(item, f).join('  |  ')}`);
+      }
+      console.log('\nThis only lists what may have drifted. Decide each one (never close the user\'s items on your own unless they asked you to tidy up):'
+        + ' done / block "why" / release / context --retire <#> for a stale note, or review --keep <id> to leave it as it is.');
+      break;
+    }
     case 'add': {
       newBoardNote(slug, meta, explicit);
       const r = addItem(slug, meta, { text: rest.join(' '), by, session, priority: flags.priority || 'normal', parent: flags.parent, summary: flags.summary });

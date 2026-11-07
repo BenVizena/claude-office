@@ -219,6 +219,26 @@ describe('handoff notes', () => {
     assert.match(out, new RegExp(`handoff: ${next.id} "Turn on the water" waited on this`));
     assert.match(out, /context <id>/);
   });
+
+  test('review lists drifted items without changing them; --keep hides one until it changes', () => {
+    const B = ['--project', 'review-board'];
+    const par = json(['add', 'Parent', ...B]);
+    const kid = json(['add', 'Child', '--parent', par.id, ...B]);
+    ok(['done', kid.id, ...B]);
+    const before = JSON.stringify(readBoard('review-board'));
+    const out = ok(['review', ...B]);
+    assert.match(out, /1 of 1 open item flagged/);
+    assert.match(out, /all 1 subtask is done/);
+    assert.match(out, new RegExp(`done ${par.id}  \\|  review --keep ${par.id}`));
+    assert.equal(JSON.stringify(readBoard('review-board')), before, 'review changes nothing');
+    assert.equal(json(['review', ...B])[0].flags[0].kind, 'children-done');
+    assert.match(ok(['review', '--keep', par.id, ...B]), /kept "Parent"/);
+    assert.match(ok(['review', ...B]), /Nothing looks drifted/);
+    assert.match(ok(['review', '--all', ...B]), /all 1 subtask is done/);
+    assert.match(ok(['review', '--days', '0', ...B]), /Nothing looks drifted|untouched/);
+    ok(['context', par.id, 'still needs a final pass', ...B]); // a change: flagged again
+    assert.match(ok(['review', ...B]), /all 1 subtask is done/);
+  });
 });
 
 describe('check commands', () => {
