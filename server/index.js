@@ -16,7 +16,7 @@ import { noteLaunch, launchesToday, sessionRunPolicy } from './runpolicy.js';
 import { setStatus } from './status.js';
 import { boardNews } from './nudges.js';
 import { ack as ackNews, markEnded as markNewsEnded, scanAll } from './news.js';
-import { startOnItem, assertStartable, LAUNCH_PERMISSION_MODES } from './launch.js';
+import { startOnItem, assertStartable, closeSessionWindow, LAUNCH_PERMISSION_MODES } from './launch.js';
 import { computeUsage } from './usage.js';
 import { useNonBlockingLocks, whenUnlocked } from './lock.js';
 import { listRuns, runSummary, loadRun, imagePath, removeRun, IMAGE_TYPES } from './results.js';
@@ -47,7 +47,7 @@ async function rebuild() {
     state.checksRunning = [...checksRunning];
     attachNews(state, boards);
     state.settings = { soundHint: true, showBackgroundSessions: settings.showBackgroundSessions, blender: !!resolveBlender(settings),
-      sessionRuns: settings.sessionRuns, sessionRunDailyCap: settings.sessionRunDailyCap, launchPermissionMode: settings.launchPermissionMode || '', autoApproveChecks: !!settings.autoApproveChecks, mergeStyle: settings.mergeStyle || 'merge' };
+      sessionRuns: settings.sessionRuns, sessionRunDailyCap: settings.sessionRunDailyCap, launchPermissionMode: settings.launchPermissionMode || '', autoApproveChecks: !!settings.autoApproveChecks, mergeStyle: settings.mergeStyle || 'merge', closeFinishedSteps: settings.closeFinishedSteps !== false };
     broadcast({ type: 'state', state });
   } catch (e) {
     console.error('rebuild failed:', e);
@@ -109,6 +109,7 @@ const runSequences = makeRunner(
     mergeStyle: () => settings.mergeStyle,
     git: gitwork,
     notify,
+    closeSession: (session) => (settings.closeFinishedSteps ? closeSessionWindow(session) : null),
     onRequest: (slug) => handleRequest(slug),
     changed: () => markDirty(),
   },
@@ -378,6 +379,10 @@ const routes = {
     if (b.autoApproveChecks !== undefined) {
       if (typeof b.autoApproveChecks !== 'boolean') throw new Error('autoApproveChecks is true or false');
       settings.autoApproveChecks = b.autoApproveChecks;
+    }
+    if (b.closeFinishedSteps !== undefined) {
+      if (typeof b.closeFinishedSteps !== 'boolean') throw new Error('closeFinishedSteps is true or false');
+      settings.closeFinishedSteps = b.closeFinishedSteps;
     }
     if (b.launchPermissionMode !== undefined) {
       if (!LAUNCH_PERMISSION_MODES.includes(b.launchPermissionMode)) throw new Error(`launchPermissionMode is one of: ${LAUNCH_PERMISSION_MODES.map((m) => m || '(none)').join(', ')}`);

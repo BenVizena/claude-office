@@ -59,6 +59,9 @@ const DEFAULT_SETTINGS = {
   // how a parallel step's branch lands in the base worktree: 'merge' (a merge commit per step), 'squash' (one plain
   // commit per step, no merge commit) or 'rebase' (its commits replayed onto the base: linear history). MERGE_STYLES.
   mergeStyle: 'merge',
+  // close the terminal window of a sequence step once it is done, checked and merged (its turn is over). Steps that
+  // fail or stop keep theirs open, so the user can talk to the session.
+  closeFinishedSteps: true,
 };
 
 /** First existing file among candidates, else null. */
