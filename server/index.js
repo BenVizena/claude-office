@@ -16,7 +16,7 @@ import { noteLaunch, launchesToday, sessionRunPolicy } from './runpolicy.js';
 import { setStatus } from './status.js';
 import { boardNews } from './nudges.js';
 import { ack as ackNews, markEnded as markNewsEnded, scanAll } from './news.js';
-import { startOnItem, LAUNCH_PERMISSION_MODES } from './launch.js';
+import { startOnItem, assertStartable, LAUNCH_PERMISSION_MODES } from './launch.js';
 import { computeUsage } from './usage.js';
 import { useNonBlockingLocks, whenUnlocked } from './lock.js';
 import { listRuns, runSummary, loadRun, imagePath, removeRun, IMAGE_TYPES } from './results.js';
@@ -240,8 +240,20 @@ const routes = {
   },
 
   // "Start a session on this": a new interactive claude in a terminal window, with the item claimed for it
+  // (newWorktree: in a new worktree and branch made from the picked one's HEAD, left for the user to merge)
   'POST /api/todos/start': async (b) => {
-    const r = await whenUnlocked(() => startOnItem({ room: findRoom(String(b.board)), id: String(b.id), worktree: String(b.worktree || ''), claudePath: settings.claudePath, permissionMode: settings.launchPermissionMode }));
+    const room = findRoom(String(b.board)), id = String(b.id);
+    const start = (worktree, own) => startOnItem({ room, id, worktree, own, claudePath: settings.claudePath, permissionMode: settings.launchPermissionMode });
+    let r;
+    if (b.newWorktree) {
+      assertStartable(room, id);
+      const pod = room.pods.find((p) => !p.removed && normPath(p.path) === normPath(String(b.worktree || '')));
+      if (!pod) throw new Error('that worktree is not part of this project');
+      const own = await gitwork.createStepWorktree(pod.path, id);
+      try { r = await whenUnlocked(() => start(own.worktree, own)); }
+      catch (e) { try { await gitwork.removeStepWorktree(pod.path, own.worktree, own.branch); } catch { /* keep it */ } throw e; }
+      r = { ...r, branch: own.branch };
+    } else r = await whenUnlocked(() => start(String(b.worktree || '')));
     markDirty();
     return r;
   },

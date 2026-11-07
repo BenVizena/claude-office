@@ -14,7 +14,7 @@ import { RUN_ENV } from './runpolicy.js';
 const LAUNCH_DIR = path.join(STAFF_DIR, '..', 'launch');
 const CLI = path.join(REPO_DIR, 'bin', 'office-todo.js').replace(/\\/g, '/');
 
-export function promptFor(board, id, step) {
+export function promptFor(board, id, step, own) {
   return `You were started from the Claude Office to-do board to work on item ${id} (board ${board}). `
     + `It is already claimed for this session. First run: node "${CLI}" show ${id} `
     + '- it has the task, its subtasks and any background other sessions left. Then do the work, following the office-todo skill '
@@ -40,7 +40,12 @@ export function promptFor(board, id, step) {
     + (step?.branch ? ` You are in your own git worktree (${step.branch.worktree}) on branch ${step.branch.branch}, made for this item `
       + `from ${step.branch.baseBranch}; other items of the sequence may be running in parallel in their own worktrees. Work only in `
       + 'this folder and COMMIT your work on this branch before you mark the item done: the office merges the branch into '
-      + `${step.branch.baseBranch} once its check passes, and refuses if anything is left uncommitted. Do not merge, rebase or push it yourself.` : '');
+      + `${step.branch.baseBranch} once its check passes, and refuses if anything is left uncommitted. Do not merge, rebase or push it yourself.` : '')
+    // ▶ "in a new worktree": nothing merges it afterwards, the user does
+    + (!step && own ? ` You are in a new git worktree (${own.worktree}) on branch ${own.branch}, made for this item from `
+      + `${own.baseBranch}, so other sessions don't edit the same files. Work only in this folder and COMMIT your work on this `
+      + `branch before you mark the item done. The office does not merge it: when you are done, tell the user the branch is ready `
+      + `to merge into ${own.baseBranch}. Do not merge, rebase or push it yourself unless the user asks.` : '');
 }
 
 // Permission modes the office may start sessions in ('' passes no flag: the user's own Claude Code default applies).
@@ -53,18 +58,29 @@ export function launchArgs({ session, prompt, permissionMode = '' }) {
   return [...(permissionMode ? ['--permission-mode', permissionMode] : []), '--session-id', session, prompt];
 }
 
-/** Throws with a readable message when the item can't be started. Returns { session, worktree }. */
-export function startOnItem({ room, id, worktree, claudePath, step, permissionMode = '' }) {
+/** Throws with a readable message when the item can't be started (checked before the office makes anything for it). */
+export function assertStartable(room, id) {
   if (room?.kind !== 'project') throw new Error('sessions can only be started on a project board');
-  // a parallel sequence step runs in a worktree the office just made inside one of the project's worktrees
-  const inside = step?.branch && room.pods.some((p) => !p.removed && normPath(worktree).startsWith(`${normPath(p.path)}/`));
-  const pod = inside ? { path: worktree } : room.pods.find((p) => !p.removed && normPath(p.path) === normPath(worktree));
-  if (!pod) throw new Error('that worktree is not part of this project');
-  if (!fs.existsSync(pod.path)) throw new Error(`${pod.path} no longer exists`);
   const it = readBoard(room.key).items.find((x) => x.id === id);
   if (!it) throw new Error('that item is no longer on the board');
   if (it.status === 'done') throw new Error('that item is already done');
   if (it.claim && !claimIsStale(it.claim)) throw new Error(`${it.claim.by} is already working on it`);
+  return it;
+}
+
+/**
+ * Throws with a readable message when the item can't be started. Returns { session, worktree }. `own` is a worktree
+ * the office just made for a plain ▶ start ({ worktree, branch, baseBranch }, from gitwork.createStepWorktree).
+ */
+export function startOnItem({ room, id, worktree, claudePath, step, own, permissionMode = '' }) {
+  if (room?.kind !== 'project') throw new Error('sessions can only be started on a project board');
+  // a parallel sequence step, or a ▶ "in a new worktree", runs in a worktree the office just made inside one of the
+  // project's worktrees
+  const inside = (step?.branch || own) && room.pods.some((p) => !p.removed && normPath(worktree).startsWith(`${normPath(p.path)}/`));
+  const pod = inside ? { path: worktree } : room.pods.find((p) => !p.removed && normPath(p.path) === normPath(worktree));
+  if (!pod) throw new Error('that worktree is not part of this project');
+  if (!fs.existsSync(pod.path)) throw new Error(`${pod.path} no longer exists`);
+  assertStartable(room, id);
 
   const session = crypto.randomUUID();
   // pending until the session's SessionStart arrives: a launch that never starts frees the item after a few minutes
@@ -75,7 +91,7 @@ export function startOnItem({ room, id, worktree, claudePath, step, permissionMo
   try { recordLaunch(room.key, id, { session, worktree: pod.path }); } catch { /* only used to pick where its check runs */ }
   try {
     const [cmd, pre] = claudeCommand(claudePath);
-    openTerminal({ cwd: pod.path, argv: [cmd, ...pre, ...launchArgs({ session, prompt: promptFor(room.key, id, step), permissionMode })],
+    openTerminal({ cwd: pod.path, argv: [cmd, ...pre, ...launchArgs({ session, prompt: promptFor(room.key, id, step, own), permissionMode })],
       title: `Claude: ${room.name} ${id}${step ? ` (step ${step.n})` : ''}`, name: session, env: step ? { [RUN_ENV]: '1' } : {} });
   } catch (e) {
     releaseItem(room.key, id, { by: 'office' });

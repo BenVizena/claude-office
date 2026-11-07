@@ -179,6 +179,8 @@ function startRow(it, v, depth) {
       ${pods.length > 1
         ? `<select data-start-wt="${it.id}" data-keep="start-wt-${it.id}">${pods.map((p) => `<option value="${esc(p.path)}">${esc(label(p))}</option>`).join('')}</select>`
         : `<span class="mono" data-start-wt="${it.id}" data-value="${esc(pods[0].path)}">${esc(label(pods[0]))}</span>`}
+      <label class="sub" title="A new git worktree (in .claude/worktrees of the one picked) on a new branch from its current commit, so this session doesn't edit the same files as sessions already working there. The office doesn't merge the branch: the session commits there and you merge it when you're happy. (Only for this one session: with &quot;then keep going&quot; the sequence works in the worktree picked, and makes one per item when it runs more than 1 at once.)">
+        <input type="checkbox" data-start-newwt="${it.id}" data-keep="start-newwt-${it.id}" /> in a new worktree and branch made from it</label>
       <span class="sub">It opens in a terminal window with the item claimed; any permission prompts show up there (the permissions setting at the top of the board picks how many).</span>
       ${v.runsFull ? '<span class="sub">(This board already has as many sequences running as it can: wait for one to finish to start another.)</span>' : `<label class="sub" title="When this is done, verified and its session's turn is over, the office starts the next ready item that waits on it (or its next subtask) in a new session. It stops on anything else: blocked, released, a failed or unapproved check, or the cap.">
         <input type="checkbox" data-start-seq="${it.id}" data-keep="start-seq-${it.id}" /> then keep going: start what waits on it, one at a time, up to

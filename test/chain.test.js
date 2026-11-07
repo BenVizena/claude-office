@@ -560,6 +560,16 @@ describe('step prompts', () => {
     assert.doesNotMatch(step, /wait as a background command/);
     assert.match(step, /do not start `wait`/);
   });
+  test('a ▶ session in a new worktree is told to commit there and that nothing merges it', async () => {
+    const { promptFor } = await import('../server/launch.js');
+    const own = { worktree: '/p/.claude/worktrees/office-x1-1', branch: 'office/x1-1', baseBranch: 'main' };
+    const p = promptFor('b', 'x1', null, own);
+    assert.match(p, /new git worktree \(\/p\/\.claude\/worktrees\/office-x1-1\) on branch office\/x1-1/);
+    assert.match(p, /COMMIT/);
+    assert.match(p, /does not merge it/);
+    assert.match(p, /wait as a background command/);
+    assert.doesNotMatch(promptFor('b', 'x1', null), /new git worktree/);
+  });
 });
 
 describe('launch permission mode', () => {
