@@ -47,7 +47,7 @@ async function rebuild() {
     state.checksRunning = [...checksRunning];
     attachNews(state, boards);
     state.settings = { soundHint: true, showBackgroundSessions: settings.showBackgroundSessions, blender: !!resolveBlender(settings),
-      sessionRuns: settings.sessionRuns, sessionRunDailyCap: settings.sessionRunDailyCap, launchPermissionMode: settings.launchPermissionMode || '', autoApproveChecks: !!settings.autoApproveChecks };
+      sessionRuns: settings.sessionRuns, sessionRunDailyCap: settings.sessionRunDailyCap, launchPermissionMode: settings.launchPermissionMode || '', autoApproveChecks: !!settings.autoApproveChecks, mergeStyle: settings.mergeStyle || 'merge' };
     broadcast({ type: 'state', state });
   } catch (e) {
     console.error('rebuild failed:', e);
@@ -106,6 +106,7 @@ const runSequences = makeRunner(
       ? `sequences started by sessions reached today's cap of ${settings.sessionRunDailyCap} sessions (office setting)` : null),
     runCheck: (cmd, cwd) => runCheck(cmd, cwd),
     autoApproveChecks: () => !!settings.autoApproveChecks,
+    mergeStyle: () => settings.mergeStyle,
     git: gitwork,
     notify,
     onRequest: (slug) => handleRequest(slug),
@@ -369,6 +370,10 @@ const routes = {
     if (b.launchPermissionMode !== undefined) {
       if (!LAUNCH_PERMISSION_MODES.includes(b.launchPermissionMode)) throw new Error(`launchPermissionMode is one of: ${LAUNCH_PERMISSION_MODES.map((m) => m || '(none)').join(', ')}`);
       settings.launchPermissionMode = b.launchPermissionMode;
+    }
+    if (b.mergeStyle !== undefined) {
+      if (!gitwork.MERGE_STYLES.includes(b.mergeStyle)) throw new Error(`mergeStyle is one of: ${gitwork.MERGE_STYLES.join(', ')}`);
+      settings.mergeStyle = b.mergeStyle;
     }
     if (b.sessionRunDailyCap !== undefined) settings.sessionRunDailyCap = Math.max(1, Math.min(200, Math.floor(Number(b.sessionRunDailyCap)) || 20));
     saveSettings(settings);

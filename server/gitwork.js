@@ -56,12 +56,45 @@ export async function createStepWorktree(base, itemId) {
   return { worktree, branch, baseBranch };
 }
 
-/** Merge a step's branch into the base. On a conflict the merge is undone and the conflicting files returned. */
-export async function mergeStep(base, branch, message) {
+export const MERGE_STYLES = ['merge', 'squash', 'rebase'];
+
+/**
+ * Bring a step's branch into the base, in one of MERGE_STYLES:
+ *  - merge: a merge commit per step (--no-ff), so the step's own commits stay grouped under it;
+ *  - squash: the step's changes as one new commit on the base (no merge commit; the branch's commits are not kept);
+ *  - rebase: the step's commits replayed onto the base's HEAD (in its own worktree), then fast-forwarded: linear history.
+ * On a conflict everything is undone (base and step worktree as they were) and the conflicting
+ * files returned. `stepWorktree` is needed for rebase. `message` is the merge or squash commit's message.
+ */
+export async function mergeStep(base, branch, message, { style = 'merge', stepWorktree } = {}) {
+  if (style === 'squash') {
+    const r = await git(base, ['merge', '--squash', branch]);
+    if (!r.ok) return conflicted(base, r, ['reset', '--merge']); // a squash leaves no MERGE_HEAD, so no merge --abort
+    const staged = await git(base, ['diff', '--cached', '--quiet']);
+    if (staged.ok) return { ok: true }; // nothing the base doesn't already have
+    const c = await git(base, ['commit', '--no-verify', '-m', message]);
+    if (c.ok) return { ok: true };
+    await git(base, ['reset', '--merge']);
+    return { ok: false, conflicts: [], error: c.err || c.out };
+  }
+  if (style === 'rebase') {
+    if (!stepWorktree) return { ok: false, conflicts: [], error: 'rebase needs the step worktree' };
+    const onto = await headOf(base);
+    if (!onto) return { ok: false, conflicts: [], error: `could not read HEAD of ${base}` };
+    const rb = await git(stepWorktree, ['rebase', onto]);
+    if (!rb.ok) return conflicted(stepWorktree, rb, ['rebase', '--abort']);
+    const ff = await git(base, ['merge', '--ff-only', branch]);
+    return ff.ok ? { ok: true } : { ok: false, conflicts: [], error: ff.err || ff.out };
+  }
   const r = await git(base, ['merge', '--no-ff', '--no-edit', '-m', message, branch]);
   if (r.ok) return { ok: true };
-  const conflicts = await git(base, ['diff', '--name-only', '--diff-filter=U']);
-  await git(base, ['merge', '--abort']);
+  return conflicted(base, r, ['merge', '--abort']);
+}
+
+/** After a failed merge/rebase in `dir`: note the conflicting files, undo it with `undo`, report. */
+async function conflicted(dir, r, undo) {
+  const conflicts = await git(dir, ['diff', '--name-only', '--diff-filter=U']);
+  await git(dir, undo);
   return { ok: false, conflicts: conflicts.out ? conflicts.out.split(/\r?\n/) : [], error: r.err || r.out };
 }
 
@@ -90,13 +123,14 @@ export async function aheadCount(base, branch) {
 }
 
 /**
- * After a merge: drop the step's worktree and branch (the branch is merged, so -d is enough). On Windows the folder
+ * After a merge: drop the step's worktree and branch (-d is enough once merged or rebased; a squashed branch's commits
+ * never reach the base, so it takes `squashed` to delete it with -D). On Windows the folder
  * can't be deleted while the step's terminal still sits in it: git then unregisters it but leaves the folder, which
  * comes back as leftover: true for sweepLeftover to delete later.
  */
-export async function removeStepWorktree(base, worktree, branch) {
-  const w = await git(base, ['worktree', 'remove', '--force', worktree]);
-  const b = await git(base, ['branch', '-d', branch]);
+export async function removeStepWorktree(base, worktree, branch, { squashed = false } = {}) {
+  await git(base, ['worktree', 'remove', '--force', worktree]);
+  const b = await git(base, ['branch', squashed ? '-D' : '-d', branch]);
   const leftover = fs.existsSync(worktree) && !(await sweepLeftover(base, worktree));
   return { ok: !leftover && b.ok, leftover, error: leftover ? 'its folder is still in use (its terminal window is open); removed later' : b.err };
 }

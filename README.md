@@ -53,6 +53,10 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
   taken back), uncommitted work in the step's worktree or uncommitted changes in the chosen worktree put the item
   back to in progress (its branch is kept) and stop new starts. On Windows a step's folder can't be deleted while its
   terminal is open; the office removes it once you close the window. Things to know:
+  - **How steps land** is an office setting on the board (*Parallel steps land as*): a merge commit per step
+    (the default), one squashed commit per step (the branch's own commits are dropped), or the step's commits rebased
+    onto the chosen worktree and fast-forwarded (linear history). A rebase conflict is aborted like a merge conflict,
+    leaving the step's branch as it was.
   - **Pick a worktree nobody works in.** Merges land in the chosen worktree (it must be on a branch), so files change
     under any session or editor working there, and your own uncommitted edits there stop the run. A separate
     worktree on an integration branch is the safest base; the dialog shows how many live sessions each one has.

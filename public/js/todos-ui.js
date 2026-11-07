@@ -151,6 +151,8 @@ const LAUNCH_MODES = {
   bypassPermissions: ['never ask (risky)', 'Nothing asks: every edit and command runs unchecked. Only for projects you can afford to lose work in'],
 };
 
+const MERGE_STYLES = { merge: 'a merge commit each', squash: 'one squashed commit each', rebase: 'rebased commits (linear)' };
+
 /** Office-wide settings for sessions the office starts, shown at the top of a project board. */
 export function boardSettingsHtml(settings = {}) {
   const runs = { off: 'only me', ask: 'sessions may ask (I approve)', allowed: 'sessions may start them' };
@@ -163,6 +165,8 @@ export function boardSettingsHtml(settings = {}) {
       <span class="${mode === 'bypassPermissions' ? 'td-warn' : ''}">${esc((LAUNCH_MODES[mode] || LAUNCH_MODES[''])[1])}</span>
       <label title="A check is a command that proves an item is done (npm test, say). The office runs it before anything that depends on the item starts in a sequence, outside Claude Code's permission prompts. Your own checks never need approval.">
         <input type="checkbox" data-auto-checks ${settings.autoApproveChecks ? 'checked' : ''} /> run checks sessions set without asking me</label>
+      <label title="How a finished step of a parallel sequence lands in the chosen worktree. Merge: a merge commit per step, its commits kept under it. Squash: one plain commit per step (its own commits are dropped). Rebase: its commits replayed on top, linear history, no merge commit.">Parallel steps land as:
+        <select data-merge-style>${Object.entries(MERGE_STYLES).map(([k, l]) => `<option value="${k}" ${k === (settings.mergeStyle || 'merge') ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     </div>`;
 }
 

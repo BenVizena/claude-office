@@ -212,9 +212,12 @@ async function processStep(slug, board, run, step, ctx, now) {
         return { fail: `can't merge "${it.text}": ${run.worktree} has uncommitted changes (commit or stash them; ${step.branch} is kept)` };
       }
       const before = await g.headOf(run.worktree);
-      const m = await g.mergeStep(run.worktree, step.branch, `Merge ${step.branch}: ${it.text} (Claude Office sequence)`);
+      // how it lands in the base (office setting mergeStyle): a merge commit, one squashed commit, or rebased commits
+      const style = ctx.mergeStyle?.() || 'merge';
+      const message = style === 'squash' ? `${it.text} (Claude Office sequence, ${step.branch})` : `Merge ${step.branch}: ${it.text} (Claude Office sequence)`;
+      const m = await g.mergeStep(run.worktree, step.branch, message, { style, stepWorktree: step.worktree });
       if (!m.ok) {
-        await reopen(slug, it, `done on ${step.branch}, but merging it conflicted`, { title: `merge conflict: ${step.branch} into ${step.baseBranch || 'the base'}`, text: `${m.conflicts.join('\n') || m.error}` });
+        await reopen(slug, it, `done on ${step.branch}, but ${style === 'rebase' ? 'rebasing' : 'merging'} it conflicted`, { title: `merge conflict: ${step.branch} into ${step.baseBranch || 'the base'}`, text: `${m.conflicts.join('\n') || m.error}` });
         return { fail: m.conflicts.length
           ? `merging "${it.text}" (${step.branch}) conflicted in ${m.conflicts.slice(0, 3).join(', ')}${m.conflicts.length > 3 ? ', …' : ''}: its branch and worktree are kept`
           : `merging "${it.text}" (${step.branch}) failed: ${String(m.error).split(/\r?\n/)[0]} (its branch and worktree are kept)` };
@@ -233,9 +236,9 @@ async function processStep(slug, board, run, step, ctx, now) {
           return { fail: `the check for "${it.text}" failed on the merged result in ${run.worktree} (exit ${res.code ?? '?'}): ${where}` };
         }
       }
-      const rm = await g.removeStepWorktree(run.worktree, step.worktree, step.branch);
+      const rm = await g.removeStepWorktree(run.worktree, step.worktree, step.branch, { squashed: style === 'squash' });
       await patchRun(slug, run.id, (r, b) => {
-        logLine(r, `merged ${step.branch} into ${step.baseBranch || 'the base'}${rm.ok ? '' : ` (${rm.error})`}`);
+        logLine(r, `${{ squash: 'squashed', rebase: 'rebased' }[style] || 'merged'} ${step.branch} into ${step.baseBranch || 'the base'}${rm.ok ? '' : ` (${rm.error})`}`);
         if (rm.leftover) b.leftovers = [...new Set([...(b.leftovers || []), JSON.stringify([run.worktree, step.worktree])])];
       });
     }
