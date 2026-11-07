@@ -10,6 +10,8 @@ export const TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-office-te
 process.env.HOME = TEST_HOME;
 process.env.USERPROFILE = TEST_HOME; // what os.homedir() reads on Windows
 delete process.env.CLAUDE_CODE_SESSION_ID;
+delete process.env.CLAUDE_OFFICE_RUN; // set when the tests run inside a sequence step: it changes what the CLI allows
+delete process.env.OFFICE_PORT;
 // git in the temp home has no identity: merges and commits in test repos need one
 Object.assign(process.env, { GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@example.com' });
 delete process.env.OFFICE_TODO_BY;
