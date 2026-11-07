@@ -1,50 +1,14 @@
 #!/usr/bin/env node
 // office-todo: read and write the Claude Office todo boards from any project.
-//   list [--all]                      open items for this project as a tree (subtasks indented)
-//   add "text" [--parent <id>] [--priority high]
-//   claim <id> [--force]              "I'm working on this" (records this Claude Code session)
-//   release <id>                      give a claim back
-//   done <id> | block <id> "why" | reopen <id> | note <id> "text" | rm <id>
-//   start <id>                        alias for claim
-//   context <id> ["text"] [--kind explanation|log|code] [--title "..."] [--lang js] [--file path | -]
-//                                     attach background info the user can read in the office (only when useful)
-//           [--replaces <n>]          ...in place of entry #n, which is retired (kept in the history, hidden by default)
-//   context <id> --retire <n> ["why"] retire a stale entry without adding one
-//   show <id> [--all]                 an item with its subtasks and background (--all: retired entries too)
-//   status "what I'm doing" [--mood 🤔] [--needs-you "question for the user"]   your speech bubble in the office
-//   status --clear | status            clear / show it
-//   move <id> --parent <id> | --root   re-parent an existing item (keeps its id, claim and background)
-//        [--before <id> | --after <id>]  ...and/or place it next to a sibling
-//   check <id> "npm test" | --clear  a command that verifies it is done (the user approves it before the office runs it)
-//   run <id> [--max N] [--parallel N]  ask the office to run the item and what waits on it, one session per item
-//                                     (it starts it or asks the user, as the office setting says)
-//   depend <id> --on <id>             <id> can't start until the other is done (marks it blocked meanwhile)
-//   undepend <id> --on <id>           remove that dependency
-//   chain <id> <id> [<id> ...] [--replace]   set an order in one go: each waits on the one before; --replace also
-//                                     drops their other dependencies on each other (outside ones are kept)
-//   edit <id> [--text "new title"] [--priority low|normal|high] [--summary "one line of context" | --summary ""]
-//   mine                              items claimed by this session
-//   completed [--days N]              recently completed items, newest first
-//   boards                            every board with open counts
-//   review [--days N] [--all]         tidy-up pass: open items that have probably drifted (untouched N days (14),
-//                                     subtasks all done, notes naming merged commits / gone branches, ended claims)
-//                                     — it only lists them; decide each: done / block / release / context --retire
-//   review --keep <id>                "leave it as it is": hides its flags until the item changes again
-//   results ...                       charts/tables/images/notes the user can view in the office
-//                                     (`office-todo results help` for the subcommands)
-//   watch <id> | unwatch <id>         follow an item's news (claimed and added items are followed automatically)
-//   following                         the items this session follows
-//   wait                              run in the background: exits when an item you follow is unblocked, finished by
-//                                     someone else or your claim is taken over, printing what happened
-// Flags: --board <board-id>  --project <path|board-id>  --global (office-wide board)  --json  --by "<who>"
-// The board comes from the git root of the current directory (worktrees share their main repo's board). An id that
-// isn't on that board is looked up on the others, and the error says where it is and how to reach it (--board).
+// The command reference lives in server/clihelp.js: `office-todo help` lists every command, `office-todo help <cmd>`
+// gives one command's flags. Keep it in step when adding or changing a command.
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { projectSlug, loadSettings } from '../server/config.js';
 import { requestRun, runsOf } from '../server/chain.js';
 import { reviewBoard, gitResolver, suggestions, STALE_DAYS } from '../server/review.js';
+import { helpText, commandHelp, findCommand } from '../server/clihelp.js';
 import { sessionRunPolicy } from '../server/runpolicy.js';
 import { setStatus, clearStatus, readStatus } from '../server/status.js';
 import {
@@ -85,7 +49,7 @@ for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a.startsWith('--')) {
     const k = a.slice(2);
-    if (['json', 'all', 'global', 'force', 'root', 'clear', 'replace'].includes(k)) flags[k] = true;
+    if (['json', 'all', 'global', 'force', 'root', 'clear', 'replace', 'help'].includes(k)) flags[k] = true;
     else flags[k] = argv[++i];
   } else pos.push(a);
 }
@@ -330,6 +294,21 @@ function results(slug, args) {
 }
 
 const [cmd = 'list', ...rest] = pos;
+// help, -h, --help, `<cmd> --help`: answered before anything touches a board
+const asksHelp = cmd === 'help' || cmd === '-h';
+if (asksHelp || flags.help) {
+  const name = asksHelp ? rest[0] : pos.length ? cmd : undefined;
+  if (!name) console.log(helpText());
+  else if (/^results?$/.test(name)) console.log(RESULTS_HELP);
+  else if (commandHelp(name)) console.log(commandHelp(name));
+  else { console.error(`office-todo: no command "${name}"
+
+${helpText()}`); process.exit(2); }
+  process.exit(0);
+}
+if (!findCommand(cmd)) { console.error(`office-todo: unknown command "${cmd}"
+
+${helpText()}`); process.exit(2); }
 try {
   var { slug, meta, explicit } = target();
   const id = rest[0];
@@ -575,7 +554,7 @@ ${d.text}`);
     case 'note': need(); print(updateItem(slug, id, { note: rest.slice(1).join(' '), by })); break;
     case 'rm': need(); { const r = removeItem(slug, id); console.log(`removed "${r.text}"${r.removed > 1 ? ` and ${r.removed - 1} subtask(s)` : ''}`); } break;
     default:
-      console.error(`unknown command: ${cmd}`); process.exit(2);
+      console.error(`office-todo: unknown command "${cmd}"`); process.exit(2); // server/clihelp.js lists it but no case handles it
   }
 } catch (e) {
   const missing = /^no item (\S+) on board/.exec(e.message);

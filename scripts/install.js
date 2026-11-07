@@ -104,6 +104,7 @@ ${T} review [--days 14]             # tidy-up pass: open items that have probabl
 ${T} watch <id> | unwatch <id>     # follow an item's news (items you claim or add are followed automatically)
 ${T} following                     # what you follow, and news not delivered yet
 ${T} wait                          # run in the BACKGROUND: finishes when an item you follow changes
+${T} help [<command>]             # every command, or one command's flags (also <command> --help)
 \`\`\`
 
 Flags: \`--global\` for the office-wide board, \`--board <board id>\` or \`--project <path>\` for another project's
