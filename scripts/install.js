@@ -287,7 +287,7 @@ async function status() {
   const claudeOk = path.isAbsolute(claude) ? fs.existsSync(claude) : !!version(claude, ['--version']);
   const blender = resolveBlender(settings);
   const lines = [
-    [nodeMajor >= 20, `Node.js ${process.versions.node}${nodeMajor >= 20 ? '' : ' (need 20 or newer)'}`],
+    [nodeMajor >= 22, `Node.js ${process.versions.node}${nodeMajor >= 22 ? '' : ' (need 22 or newer)'}`],
     [!!git, git || 'git not found on PATH'],
     [claudeOk, claudeOk ? `Claude Code: ${claude}` : `Claude Code not found (claudePath = ${claude})`],
     [fs.existsSync(path.join(REPO_DIR, 'node_modules', 'ws')), 'npm dependencies installed'],
