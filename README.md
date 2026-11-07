@@ -27,7 +27,10 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
   When a session ends, its claims are marked "session ended" so another session can take them without `--force`.
 - **▶ Start a session on an item.** On a project board, ▶ opens a terminal window running `claude` in the worktree
   you pick, with the item already claimed for it. It's an ordinary interactive session: you approve its permissions
-  as usual. Before marking its item done, a session leaves a handoff note on every item that waits on it.
+  as usual. Before marking its item done, a session leaves a handoff note on every item that waits on it. Tick
+  *in a new worktree and branch made from it* to have the office make a fresh worktree for it first
+  (`.claude/worktrees/office-<id>-…` inside the one you picked, on branch `office/<id>-…` from its HEAD), so it
+  doesn't edit the same files as sessions already there. The session commits on that branch; merging it is up to you.
 - **Checks.** An item can carry a command that proves it is done (`npm test`). Set one in the item's edit row, or a
   session sets one with `office-todo check <id> "..."`. The office only runs a check you approved (your own are
   approved as you type them; one a session set shows an *approve* button), so a well-behaved session can't use

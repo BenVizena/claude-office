@@ -44,7 +44,7 @@ async function excludeWorktrees(base) {
 export async function createStepWorktree(base, itemId) {
   await excludeWorktrees(base);
   const baseBranch = await currentBranch(base);
-  if (!baseBranch || baseBranch === 'HEAD') throw new Error(`${base} is not on a branch (detached HEAD): pick a worktree on a branch for parallel steps`);
+  if (!baseBranch || baseBranch === 'HEAD') throw new Error(`${base} is not on a branch (detached HEAD): pick a worktree on a branch to make new worktrees from`);
   // the stamp makes each try its own folder, so a leftover one still held open by a terminal never blocks a rerun
   const stamp = Date.now().toString(36);
   const branch = `office/${itemId}-${stamp}`;

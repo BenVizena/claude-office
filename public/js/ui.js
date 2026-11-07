@@ -435,7 +435,7 @@ export class UI {
           await api('/api/todos/run', { board: v.board, id: d.todoStartGo, worktree, max: Number($(`[data-start-max="${d.todoStartGo}"]`, this.body)?.value) || 5,
             parallel: Number($(`[data-start-par="${d.todoStartGo}"]`, this.body)?.value) || 1 });
         }
-        else await api('/api/todos/start', { board: v.board, id: d.todoStartGo, worktree });
+        else await api('/api/todos/start', { board: v.board, id: d.todoStartGo, worktree, newWorktree: !!$(`[data-start-newwt="${d.todoStartGo}"]`, this.body)?.checked });
         v.starting = null; this.render(false);
       }
       else if (d.todoApproveCheck) {
