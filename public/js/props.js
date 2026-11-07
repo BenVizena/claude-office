@@ -1,7 +1,7 @@
 // Office furniture and set dressing: room shells, desk pods, clutter, dust, boards.
 import * as THREE from 'three';
 import { box, rbox, cyl, ball, cone, group, mat, glow, rng, canvasTexture, shade } from './kit.js';
-import { WALL_H, DOOR_H, WINDOW, ARCH, roomOpenings } from '../shared/layout.js';
+import { WALL_H, DOOR_H, WINDOW, ARCH, roomOpenings, seatLayout, deskWidth } from '../shared/layout.js';
 import { SIGN_FONTS } from '../shared/catalog.js';
 import { viewTexture, viewLight } from './views.js';
 
@@ -220,27 +220,27 @@ export function roomShell(size, theme, kind = 'project') {
 }
 
 // ---------- desk pod ----------
-export const SEATS = [
-  // x offset along the desk, side (-1 = back side facing +z, +1 = front side facing -z)
-  { x: -1.3, side: -1 }, { x: 0, side: -1 }, { x: 1.3, side: -1 },
-  { x: -1.3, side: 1 }, { x: 0, side: 1 }, { x: 1.3, side: 1 },
-];
+// Seats: { x offset along the desk, side (-1 = back side facing +z, +1 = front side facing -z) }, from seatLayout().
+// A desk seats 6 and grows a seat pair (and SEAT_W of length) at a time when more sessions share the worktree.
+export const SEATS = seatLayout(6);
 export const DESK_W = 4.2, DESK_D = 1.6, DESK_H = 0.74;
 
-export function seatPose(i) {
-  const s = SEATS[i];
+export function seatPose(s) {
   return { x: s.x, z: s.side * 1.25, rotY: s.side < 0 ? 0 : Math.PI };
 }
 
-/** Static parts of a pod: desk, chairs, monitors. Pod-local, centred on the desk. */
-export function deskPod(accent) {
+/** Static parts of a pod: desk, chairs, monitors for `n` seats. Pod-local, centred on the desk. */
+export function deskPod(accent, n = 6) {
   const g = new THREE.Group();
-  g.add(box(DESK_W, 0.05, DESK_D, DESK, 0, DESK_H - 0.05, 0));
-  for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(box(0.06, DESK_H - 0.05, 0.06, LEG, x * (DESK_W / 2 - 0.1), 0, z * (DESK_D / 2 - 0.1)));
-  g.add(box(DESK_W - 0.2, 0.3, 0.03, mat(accent), 0, DESK_H, 0)); // privacy divider
+  const seats = seatLayout(n);
+  const W = deskWidth(n);
+  g.add(box(W, 0.05, DESK_D, DESK, 0, DESK_H - 0.05, 0));
+  for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(box(0.06, DESK_H - 0.05, 0.06, LEG, x * (W / 2 - 0.1), 0, z * (DESK_D / 2 - 0.1)));
+  if (W > DESK_W + 0.01) for (const z of [-1, 1]) g.add(box(0.06, DESK_H - 0.05, 0.06, LEG, 0, 0, z * (DESK_D / 2 - 0.1))); // middle legs
+  g.add(box(W - 0.2, 0.3, 0.03, mat(accent), 0, DESK_H, 0)); // privacy divider
   const monitors = [];
   const chairs = [];
-  SEATS.forEach((s, i) => {
+  seats.forEach((s) => {
     const sz = s.side * 0.45;
     const mon = new THREE.Group();
     const screenMat = new THREE.MeshStandardMaterial({ color: '#2b2d31', emissive: '#000000', roughness: 0.4 });
@@ -254,14 +254,14 @@ export function deskPod(accent) {
     g.add(mon);
     monitors.push(mon);
     g.add(box(0.4, 0.02, 0.14, '#e8e8e8', s.x, DESK_H, s.side * 0.68)); // keyboard
-    const pose = seatPose(i);
+    const pose = seatPose(s);
     const ch = officeChair();
     ch.position.set(pose.x, 0, pose.z);
     ch.rotation.y = pose.rotY;
     g.add(ch);
     chairs.push(ch);
   });
-  return { group: g, monitors, chairs };
+  return { group: g, monitors, chairs, seats, width: W };
 }
 
 export function officeChair() {
@@ -293,12 +293,11 @@ export function nameplate(text, sub, accent) {
 
 // ---------- clutter: mugs and energy cans ----------
 const CAN_COLORS = ['#2d2d2d', '#2d2d2d', '#1f6f43', '#2b59c3'];
-export function clutter(seatIndex, pct, seed) {
+export function clutter(s, pct, seed) {
   const g = new THREE.Group();
   const n = Math.round(Math.min(1, pct) * 14);
   if (!n) return g;
   const r = rng(seed);
-  const s = SEATS[seatIndex];
   const side = s.side;
   for (let i = 0; i < n; i++) {
     const isCan = i >= 5 || (pct > 0.6 && r() < 0.5);
@@ -334,7 +333,7 @@ export function energyCan(color) {
 }
 
 /** Uncommitted files: stacks of paper on the desk. */
-export function paperStacks(dirty, seed) {
+export function paperStacks(dirty, seed, deskW = DESK_W) {
   const g = new THREE.Group();
   const stacks = Math.min(4, Math.ceil(dirty / 5));
   const r = rng(seed);
@@ -342,7 +341,7 @@ export function paperStacks(dirty, seed) {
   for (let i = 0; i < stacks; i++) {
     const h = Math.min(5, left) * 0.012 + 0.01;
     left -= 5;
-    const p = box(0.24, h, 0.32, '#fbfbf8', -DESK_W / 2 + 0.25 + i * 0.28, DESK_H, (r() - 0.5) * 0.3);
+    const p = box(0.24, h, 0.32, '#fbfbf8', -deskW / 2 + 0.25 + i * 0.28, DESK_H, (r() - 0.5) * 0.3);
     p.rotation.y = (r() - 0.5) * 0.4;
     g.add(p);
   }
@@ -365,7 +364,7 @@ const dustMat = new THREE.MeshBasicMaterial({ map: dustTex, transparent: true, d
 const webMat = new THREE.LineBasicMaterial({ color: '#8d8d8d', transparent: true, opacity: 0.75 });
 const bunnyMat = new THREE.MeshStandardMaterial({ color: '#b9b2a6', roughness: 1, flatShading: true });
 
-export function dust(level, seed, area = { w: DESK_W + 1.5, d: 4 }) {
+export function dust(level, seed, deskW = DESK_W, area = { w: deskW + 1.5, d: 4 }) {
   const g = new THREE.Group();
   if (level <= 0.05) return g;
   const r = rng(seed);
@@ -376,7 +375,7 @@ export function dust(level, seed, area = { w: DESK_W + 1.5, d: 4 }) {
     m.userData.ownGeometry = true;
     m.rotation.x = -Math.PI / 2;
     const onDesk = r() < 0.45;
-    m.position.set((r() - 0.5) * (onDesk ? DESK_W : area.w), onDesk ? DESK_H + 0.005 : 0.012 + i * 0.0003, (r() - 0.5) * (onDesk ? DESK_D : area.d));
+    m.position.set((r() - 0.5) * (onDesk ? deskW : area.w), onDesk ? DESK_H + 0.005 : 0.012 + i * 0.0003, (r() - 0.5) * (onDesk ? DESK_D : area.d));
     m.material = dustMat;
     g.add(m);
   }
@@ -390,7 +389,7 @@ export function dust(level, seed, area = { w: DESK_W + 1.5, d: 4 }) {
     g.add(b);
   }
   if (level > 0.35) {
-    const corners = [[-DESK_W / 2, -DESK_D / 2], [DESK_W / 2, -DESK_D / 2], [-DESK_W / 2, DESK_D / 2], [DESK_W / 2, DESK_D / 2]];
+    const corners = [[-deskW / 2, -DESK_D / 2], [deskW / 2, -DESK_D / 2], [-deskW / 2, DESK_D / 2], [deskW / 2, DESK_D / 2]];
     const webs = Math.round((level - 0.3) * 8);
     for (let i = 0; i < webs; i++) {
       const [cx, cz] = corners[i % 4];

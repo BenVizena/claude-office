@@ -3,7 +3,7 @@ import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   roomSize, podPosition, boardSpans, roomOpenings, blockedRects, wallKeepouts, placeRooms, dustLevel, adminSpot, designerSpot,
-  POD_W, POD_D, MARGIN, HALL, LOBBY,
+  POD_W, POD_D, MARGIN, HALL, LOBBY, podSeats, podWidth, deskWidth, seatLayout, SEAT_W,
 } from '../public/shared/layout.js';
 import { BUILTIN_CATALOG, FLOOR_STYLES, VIEWS, DEFAULT_THEME } from '../public/shared/catalog.js';
 import { newsText } from '../public/js/news-text.js';
@@ -29,6 +29,45 @@ describe('rooms and pods', () => {
         assert.ok(p.z - POD_D / 2 >= MARGIN - 1e-9 && p.z + POD_D / 2 <= size.d + 1e-9, `pod z in room (${n} pods)`);
       }
       assert.equal(new Set(pods.map((p) => `${p.x},${p.z}`)).size, n);
+    }
+  });
+});
+
+describe('desks that grow', () => {
+  test('a desk seats 6, then grows a seat pair at a time', () => {
+    assert.deepEqual([0, 1, 6, 7, 8, 9, 13].map(podSeats), [6, 6, 6, 8, 8, 10, 14]);
+    assert.equal(deskWidth(6), 4.2);
+    assert.equal(deskWidth(8), 4.2 + SEAT_W);
+    assert.equal(podWidth(6), POD_W);
+  });
+
+  test('seat layout: back side then front side, evenly spaced and centred, all on the desk', () => {
+    assert.deepEqual(seatLayout(6), [{ x: -1.3, side: -1 }, { x: 0, side: -1 }, { x: 1.3, side: -1 }, { x: -1.3, side: 1 }, { x: 0, side: 1 }, { x: 1.3, side: 1 }]);
+    for (const n of [8, 10, 16]) {
+      const seats = seatLayout(n);
+      assert.equal(seats.length, n);
+      assert.equal(new Set(seats.map((s) => `${s.x},${s.side}`)).size, n);
+      // each seat's monitor (0.66 wide) and results screen (x + 0.62) stay on the desk top
+      for (const s of seats) assert.ok(Math.abs(s.x) + 0.7 <= deskWidth(n) / 2, `seat ${s.x} on a ${n}-seat desk`);
+    }
+  });
+
+  test('a room widens to fit a longer desk, and no pods overlap', () => {
+    const plain = roomSize(3);
+    const big = roomSize(3, [6, 10, 6]);
+    assert.equal(big.w, plain.w + podWidth(10) - POD_W);
+    assert.equal(big.slots[1].seats, 10);
+    for (const [n, seats] of [[3, [6, 10, 6]], [5, [12, 6, 6, 6, 8]], [4, [8]]]) {
+      const size = roomSize(n, seats);
+      const spans = Array.from({ length: n }, (_, i) => {
+        const p = podPosition(i, size), w = podWidth(seats[i]);
+        assert.ok(p.x - w / 2 >= MARGIN - 1e-9 && p.x + w / 2 <= size.w - MARGIN + 1e-9, `pod ${i} x in room`);
+        return { ...p, w };
+      });
+      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        const a = spans[i], b = spans[j];
+        if (a.z === b.z) assert.ok(Math.abs(a.x - b.x) >= (a.w + b.w) / 2 - 1e-9, `pods ${i} and ${j} overlap`);
+      }
     }
   });
 });

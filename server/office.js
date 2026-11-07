@@ -6,7 +6,7 @@ import { resolveRoot, repoInfo } from './git.js';
 import { normPath, projectSlug, isStaffPath, CLAUDE_DIR, OFFICE_DIR, readJson, writeJsonAtomic } from './config.js';
 
 const ROOM_SIZES_FILE = path.join(OFFICE_DIR, 'room-sizes.json');
-import { roomSize, placeRooms, dustLevel, LOBBY } from '../public/shared/layout.js';
+import { roomSize, podSeats, placeRooms, dustLevel, LOBBY } from '../public/shared/layout.js';
 import { readBoard, listBoards, GLOBAL_BOARD } from './todos.js';
 import { allStatuses } from './status.js';
 import { listRuns, runSummary, sparkline, projectsWithResults } from './results.js';
@@ -121,7 +121,8 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
     const slug = projectSlug(p.root);
     const board = readBoard(slug);
     const usedBranches = new Set(pods.map((x) => x.branch).filter(Boolean));
-    const size = roomSize(stickyPodCount(slug, pods.length, now));
+    for (const pod of pods) pod.seats = stickySeats(pod.key, pod.sessions.filter((x) => x.status !== 'gone').length, now);
+    const size = roomSize(stickyPodCount(slug, pods.length, now), pods.map((x) => x.seats));
     rooms.push({
       key: slug, kind: 'project', name: path.basename(p.root), root: p.root, isGit: p.isGit, exists: p.exists,
       lastActivity, dust: dustLevel(lastActivity, now),
@@ -192,6 +193,21 @@ function stickyPodCount(slug, n, now) {
     writeJsonAtomic(ROOM_SIZES_FILE, roomSizes);
   }
   return Math.max(1, next.n);
+}
+
+/**
+ * Desk size per worktree: grows as soon as more sessions share it than it seats, shrinks back only after the smaller
+ * count has held for SEAT_SHRINK_AFTER, so a session ending doesn't rebuild the room (in memory: a restart recomputes).
+ */
+const SEAT_SHRINK_AFTER = 15 * 60000;
+const podSeatMemo = new Map();
+function stickySeats(key, live, now) {
+  const want = podSeats(live);
+  const prev = podSeatMemo.get(key);
+  if (!prev || want >= prev.seats) { podSeatMemo.set(key, { seats: want, smallerSince: 0 }); return want; }
+  if (!prev.smallerSince) prev.smallerSince = now;
+  if (now - prev.smallerSince > SEAT_SHRINK_AFTER) { podSeatMemo.set(key, { seats: want, smallerSince: 0 }); return want; }
+  return prev.seats;
 }
 
 /** Are the office hooks in ~/.claude/settings.json? (re-checked at most every 30s) */
