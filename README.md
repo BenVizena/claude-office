@@ -113,6 +113,203 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
 | ![Results window with a loss chart, a bar chart, a test-suite table and a takeaways note](docs/screenshots/results-window.png) | |
 | **Results** — charts and notes a session posted | |
 
+## How the to-do board and sequences work
+
+The bullets above say what you see. This section explains the model underneath: what a board is, how sessions
+coordinate through it, how a sequence turns a set of board items into a chain of fresh sessions, how Claude takes
+part in all of it, and what that buys you in capability and in tokens.
+
+### The board: shared state that outlives any one session
+
+Every project (a git repo; its worktrees share it) has one board, and there is one office-wide board. A board is a
+plain JSON file in `~/.claude/office/todos/`. The server and the `office-todo` CLI both read and write it, taking a
+lock file for each write, so the page on the wall, your clicks and any number of sessions all edit the same state.
+
+Each **item** has:
+
+- **A title and a one-line summary.** The title is short and imperative. The summary says why the item matters or
+  where it stands. A summary over 200 characters is shortened, and the full text is kept as background.
+- **A status**: `todo`, `doing`, `blocked` or `done`, plus a priority.
+- **A place in two structures that do different jobs:**
+  - **Parent/child** (subtasks, up to 4 levels) says *what is part of what*. A parent is only finished when its
+    subtasks are.
+  - **Dependencies** (`blockedBy`, the arrows in the Tree tab) say *what has to happen first*. They can cross the
+    whole board. An item with an unfinished dependency is blocked automatically. When the last one is done, it goes
+    back to `todo` by itself and the sessions following it hear about it. An item you block by hand stays blocked
+    until you unblock it.
+- **A claim**: which session is working on it. A claim is how two sessions avoid doing the same work. Taking a live
+  claim needs `--force`. A claim is *stale*, and anyone may take it, when its session ended, when a ▶ launch never
+  started (10 minutes), or when nobody has touched it for 6 hours.
+- **Background**: numbered notes, logs and code snippets that sessions or you attach. They are stored separately
+  (`todos/details/`), so a board stays small and `list` stays cheap, while `show <id>` gives the full story. Notes
+  are never deleted. A stale note is *replaced* or *retired* and kept in the history, so the current picture stays
+  accurate without losing the record.
+- **A check** (optional): a command that proves the item is done, such as `npm test`. It only runs once you approve
+  it, unless you let checks run unapproved.
+
+The board is the **durable memory of the work**. A Claude session's context disappears when it ends or compacts.
+What it wrote to the board stays: what it found, what it decided, what is left. The next session starts from that
+instead of from nothing.
+
+### How sessions stay in sync with it
+
+Sessions don't poll the board. The office tells them what changed, and only when something changed:
+
+1. **Subscriptions.** A session follows every item it claims or adds, from the moment it does, plus anything it
+   `watch`es. Following ends on its own when the item is done or removed, when the claim is gone, or after 5 wake-ups.
+   That way an idle session can't be woken forever.
+2. **An outbox per session.** The office compares each followed item with how it looked last time and queues news
+   when something mattered: it was unblocked, someone else finished it, the claim was taken over, or you added
+   work.
+3. **Delivery through hooks.** On `SessionStart` the hook adds a few lines to the session's context: how many items
+   are open, how many are ready, what this session holds, and claims left behind by ended sessions. On each later
+   prompt it adds only news from the outbox. With nothing new, it adds **nothing**: no text, no tokens. The note is
+   capped at 6 lines. News leaves the outbox only once the hook confirms it printed it, so a dropped hook means news
+   arrives twice, never that it is lost.
+4. **`office-todo wait` for idle sessions.** A session that has to wait for another one runs `wait` as a background
+   command. It is an ordinary Node process: it uses no tokens while waiting and exits, waking the session, when a
+   followed item changes.
+5. **Ended sessions let go.** When a session ends, the office marks its claims "session ended", so the next session
+   can pick the work up without `--force` and reads the background the previous one left.
+
+### How Claude works with the board
+
+The `office-todo` skill (installed by `npm run setup`) teaches each session how to use the board. In practice a
+session:
+
+- **Puts multi-part work on the board before starting.** When you hand it a list (review findings, a plan, several
+  fixes), it adds one item per task, then claims and finishes them one at a time, so you can follow progress from
+  the office.
+- **Claims before it starts** and releases what it gives up, so parallel sessions don't collide.
+- **Splits big items** into subtasks and restructures with `move` rather than deleting and re-adding, so ids,
+  claims and background survive.
+- **Records what matters, briefly**: the root cause, the key log, the decision and why. Stale notes are corrected
+  in place with `--replaces` or `--retire`.
+- **Adds follow-ups as it notices them** (a bug spotted on the way, a gap, a TODO), with a summary saying why they
+  matter.
+- **Only marks items done once they are verified**, running the item's check itself first if there is one.
+- **Leaves a handoff note** on every item that waits on its own before marking it done. The note covers what changed,
+  where things are, and decisions and their reasons. If a later item shouldn't go ahead as written any more, the
+  session blocks it with the reason.
+- **Keeps its speech bubble current** and raises ✋ only for a decision that only you can make.
+- **Can plan and request a sequence** (below), but never starts one if a sequence started it.
+
+### Sequences: a chain of items, one fresh session each
+
+A **sequence** is the office working through a set of board items for you, each in a **new Claude Code session with
+a clean context**, started only once everything it depends on is done and verified.
+
+**What a sequence covers.** Starting a sequence on an item covers that item, all its subtasks, and every item that
+waits on any of them, recursively. Building a chain is building a dependency graph on the board: a straight line
+(A → B → C), a fan-out (B and C both wait only on A), a join (D waits on B and C), or any mix.
+
+**The loop.** Every few seconds the server goes through each running sequence:
+
+1. **Pick what is ready**: in scope, `todo`, unclaimed (or stale), all dependencies done *and* fully verified and
+   merged, and all subtasks done. Ties go by board order: what you arranged by hand first, then priority, then age.
+2. **Launch it.** The office opens a terminal running an interactive `claude` with a new session id, claims the item
+   for that id *before* the session starts, and gives it a short prompt. The prompt names only the item id, says
+   this is step N of up to M, and tells the session to run `show <id>`, do this one item, leave handoff notes, mark
+   it done and end its turn. Everything else the session needs comes from the item's background, which includes
+   the handoff notes from the steps before it.
+3. **Wait for a clean finish.** A step is finished only when the item is marked `done` **and** the session's turn
+   is over (a `Stop` hook, or Claude Code's idle "waiting for your input" notification). Then nothing can still be
+   editing files when the next step starts.
+4. **Verify.** If the item has an approved check, the office runs it in the step's worktree. If the check fails, the
+   item goes back to in progress, the output is attached to the item, and the sequence stops.
+5. **Move on**, until everything in scope is done, the step cap is reached (default 5, at most 15), or something
+   needs you.
+
+**It stops on anything but a clean, verified done**: the item was blocked, released, reopened or taken over; the
+session ended or never started; the check failed or isn't approved; or a merge conflicted. The step's desk shows ✋
+with the reason. The sequence never guesses past a problem. *Stop* starts nothing new and lets running steps
+finish. Pressing it again stops the sequence right away. Session windows are never closed for you unless a step
+finished cleanly.
+
+**Parallel sequences** (*at once* > 1, or `--parallel N`, up to 4) start several ready items side by side. Each one
+gets its own git worktree and branch made from the base worktree's HEAD, so no two edit the same files. When a step
+is done and verified, the office:
+
+1. refuses if the step left uncommitted work, or if the base worktree has uncommitted changes,
+2. lands the branch in the base as a merge commit, a squashed commit or a rebase, per the board setting,
+3. **runs the check again on the merged result** and takes the merge back if it fails (two branches can each pass
+   and still break each other once combined),
+4. removes the step's worktree,
+
+and only then counts the item as done for what waits on it. So a join item always starts on a tree that contains
+every branch it depends on, already checked together.
+
+**No Claude orchestrates any of this.** The runner is ordinary server code reading the board, the hooks and git.
+Nothing pays for tokens while a step works, while a check runs, or while a sequence waits for you.
+
+**Several at once.** A board runs up to 15 sequences, as long as no two share an open item. Otherwise one sequence
+could start, or wait on, another's work.
+
+### How Claude works with sequences
+
+Sequences can run in two directions:
+
+- **Claude plans, the office runs.** Ask a session to "turn this into a chain of tasks and run it". Following the
+  skill, it:
+  1. adds one item per step that a fresh session can finish and verify on its own,
+  2. writes into each item's background what that step needs to know (goal, files, constraints, how to tell it
+     worked), since that session starts knowing nothing else,
+  3. links the steps with `depend` or `chain` (fan-outs for independent work, joins where work comes together),
+  4. adds fast, specific checks,
+  5. calls `office-todo run <root> --max N [--parallel N]`.
+
+  The *Sequences* board setting decides what happens next. *Only me* refuses the request. *Sessions may ask* parks
+  it on the board with Start / Dismiss and shows ✋. *Sessions may start them* starts it at once. The session that
+  asked is then free: board news tells it as items finish, or it can simply end.
+- **Claude is a step.** A step session sees "step N of up to M" in its prompt. It reads its item, does only that
+  item, leaves handoff notes for what comes next, commits on its branch in a parallel run, marks the item done and
+  ends its turn. It doesn't start `wait`, other items or sequences. The CLI refuses those anyway: a step session is
+  marked by an environment variable and recorded in the office's run log. Subagents inside its own item are fine.
+
+Guardrails keep sessions from starting runs on their own without limit. A step session can never start a sequence,
+so runs can't spawn runs. Sequences that sessions started share a daily cap of 20 launched sessions
+(`sessionRunDailyCap`). A board holds one pending request at a time. As noted in *Sessions starting sequences*
+above, these settings shape what well-behaved sessions do; they are not a security boundary.
+
+### What this gets you
+
+**Capability**
+
+- **Work that outlasts a context window.** A job too big for one session becomes a chain of steps, each sized to
+  finish in a single clean context. The board carries what one step learned to the next.
+- **Unattended progress with a stop at every failure.** You plan a chain and walk away. It advances only on a
+  verified done, and it stops and raises ✋ at the first thing that isn't clean, instead of piling more work on a
+  broken step.
+- **Real parallelism without the merge mess.** Independent items run in separate worktrees and branches, land one by
+  one and are rechecked after landing. Joins always see the combined result.
+- **Coordination between sessions you start yourself**, sequence or not: claims prevent double work, dependencies
+  block and unblock automatically, and news reaches the sessions it concerns.
+- **A record you can audit.** Every item keeps who did it, when, what they found, the check result and the handoff
+  notes. The Completed tab and the sequence log show what happened while you were away.
+
+**Token efficiency.** The savings come from structure, not from compressing anything:
+
+- **Waiting is free.** The sequence runner, the checks, the merges and `office-todo wait` are plain processes. The
+  usual alternative is an orchestrating Claude session (or subagents) polling for progress. That session would pay
+  for a turn every time it checked, with its whole growing context re-read each time. Here nothing is billed
+  between steps.
+- **Each step starts small.** In a single long session, every turn re-reads everything before it: earlier tasks'
+  file reads, diffs, test output. So the cost of each turn grows with the work already done, and long sessions
+  compact, which costs tokens itself and loses detail. A fresh session per step starts from the system prompt, the
+  skill and one item's background, so step 10 costs about what step 1 did.
+- **Handoff notes replace rediscovery.** The next step reads a few lines saying what changed and where. It doesn't
+  have to explore the codebase again to find that out.
+- **Silence by default.** Board news costs nothing when nothing changed, is capped at a few lines when something
+  did, and only concerns items the session follows. Background lives outside the board file, so `list` stays short
+  and a session pulls in detail (`show <id>`) only for the items it works on.
+- **Failures stop early.** A step that fails its check halts the sequence before later steps spend tokens building on
+  it.
+
+The trade-off: every fresh session pays a fixed start-up cost (system prompt, CLAUDE.md, skill, reading its item),
+and it starts without the warm understanding of the code a long session builds up. Sequences pay off when the steps
+are substantial and fairly self-contained. Steps that are too small each pay the start-up cost and rediscover the
+same ground, which is why the skill tells sessions to size steps so each one does meaningful work.
+
 ## Requirements
 
 - **Node.js 22+** and **git** on your PATH
