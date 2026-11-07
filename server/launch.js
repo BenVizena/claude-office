@@ -64,7 +64,9 @@ export function startOnItem({ room, id, worktree, claudePath, step }) {
   try { subscribe(session, readBoard(room.key), id, 'claim'); } catch { /* the office subscribes it on its first hook */ }
   try { recordLaunch(room.key, id, { session, worktree: pod.path }); } catch { /* only used to pick where its check runs */ }
   try {
-    openTerminal({ cwd: pod.path, claudePath, args: ['--session-id', session, promptFor(room.key, id, step)], title: `Claude: ${room.name} ${id}${step ? ` (step ${step.n})` : ''}`, session, env: step ? { [RUN_ENV]: '1' } : {} });
+    const [cmd, pre] = claudeCommand(claudePath);
+    openTerminal({ cwd: pod.path, argv: [cmd, ...pre, '--session-id', session, promptFor(room.key, id, step)],
+      title: `Claude: ${room.name} ${id}${step ? ` (step ${step.n})` : ''}`, name: session, env: step ? { [RUN_ENV]: '1' } : {} });
   } catch (e) {
     releaseItem(room.key, id, { by: 'office' });
     throw e;
@@ -75,28 +77,34 @@ export function startOnItem({ room, id, worktree, claudePath, step }) {
 // ---- opening a terminal window, per platform ----
 // The command goes in a small launcher script (no shell quoting through spawn), which the terminal runs.
 
+// Markers a Claude session puts in its children's environment. The office is often started from inside a session (the
+// setup skill does), so it inherits them, and a launched session that sees them thinks it is a child: it stops saving
+// its transcript, and the office, which finds sessions by their transcripts, never shows it.
+export const INHERITED_SESSION_VARS = ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT'];
+
 const cmdQuote = (s) => `"${String(s).replace(/%/g, '%%').replace(/"/g, '""')}"`;
 const shQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
-function openTerminal({ cwd, claudePath, args, title, session, env = {} }) {
+/** Runs argv in a new terminal window in cwd (also used by scripts/open.js to start the office itself). `name` names
+ *  the launcher script. Throws when no terminal can be opened. */
+export function openTerminal({ cwd, argv, title, name, env = {} }) {
   fs.mkdirSync(LAUNCH_DIR, { recursive: true });
   cleanOldLaunchers();
-  const [cmd, pre] = claudeCommand(claudePath);
-  const argv = [cmd, ...pre, ...args];
   if (process.platform === 'win32') {
-    const file = path.join(LAUNCH_DIR, `${session}.cmd`);
+    const file = path.join(LAUNCH_DIR, `${name}.cmd`);
     fs.writeFileSync(file, ['@echo off', `title ${title.replace(/[^\w .:-]/g, '')}`, `cd /d ${cmdQuote(cwd)}`,
+      ...INHERITED_SESSION_VARS.map((k) => `set "${k}="`),
       ...Object.entries(env).map(([k, v]) => `set "${k}=${String(v).replace(/["%]/g, '')}"`),
       argv.map(cmdQuote).join(' '), ''].join('\r\n'));
     // `start` gives it its own console window; the launcher path is ours, so verbatim arguments are safe here
-    const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `start "Claude" "${file}"`],
+    const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `start "${title.replace(/[^\w .:-]/g, '')}" "${file}"`],
       { detached: true, stdio: 'ignore', windowsVerbatimArguments: true, windowsHide: true });
     child.on('error', (e) => console.error('could not open a terminal:', e.message));
     child.unref();
     return;
   }
-  const file = path.join(LAUNCH_DIR, `${session}.command`);
-  const exports = Object.entries(env).map(([k, v]) => `export ${k}=${shQuote(v)}\n`).join('');
+  const file = path.join(LAUNCH_DIR, `${name}.command`);
+  const exports = `unset ${INHERITED_SESSION_VARS.join(' ')}\n` + Object.entries(env).map(([k, v]) => `export ${k}=${shQuote(v)}\n`).join('');
   fs.writeFileSync(file, `#!/bin/sh\ncd ${shQuote(cwd)} || exit 1\n${exports}exec ${argv.map(shQuote).join(' ')}\n`, { mode: 0o755 });
   if (process.platform === 'darwin') {
     spawn('open', ['-a', 'Terminal', file], { detached: true, stdio: 'ignore' }).unref();

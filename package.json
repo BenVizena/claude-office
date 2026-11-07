@@ -11,6 +11,7 @@
   "scripts": {
     "test": "node --test --test-reporter=spec \"test/**/*.test.js\"",
     "start": "node server/index.js",
+    "open": "node scripts/open.js",
     "setup": "node scripts/install.js setup",
     "status": "node scripts/install.js status",
     "install-hooks": "node scripts/install.js hooks",

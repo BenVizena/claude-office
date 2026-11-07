@@ -134,7 +134,9 @@ npm run setup        # installs the hooks and the office-todo skill, then checks
 npm start            # http://localhost:4777
 ```
 
-Next time, just run `npm start` in this folder. `npm run status` checks the install; `npm run uninstall` removes
+Next time, just run `npm start` in this folder. `npm run open` does the same in a new terminal window (and does
+nothing if the office is already running); Claude Code uses it, through the `/start-office` skill, so the office
+doesn't stop with the session that started it. `npm run status` checks the install; `npm run uninstall` removes
 the hooks and the skill.
 
 Setup installs two things outside this folder:

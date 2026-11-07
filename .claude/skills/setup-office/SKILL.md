@@ -69,18 +69,17 @@ found, set `blenderPath` in `~/.claude/office/settings.json` to the executable.
 
 ## 4. Start the office
 
-The office is a small local server that has to keep running while they use it. Don't start it as your own background
-command: it would stop when this Claude Code session ends. Open it in its own terminal window instead:
+The office is a small local server that has to keep running while they use it. Start it with `npm run open` (Bash
+timeout of at least 150000 ms), never `npm start` or your own background command: `npm run open` opens it in its own
+terminal window, so it outlives this session, without the markers this session would otherwise pass on to it (sessions
+it starts would then save no transcripts and never appear in the office). It waits until the server answers, which can
+take a minute the first time, and does nothing if the office is already running. The start-office skill has the details.
 
-- **Windows:** `cmd //c start "Claude Office" cmd /k npm start`
-- **macOS:** `osascript -e "tell application \"Terminal\" to do script \"cd '$(pwd)' && npm start\""`
-- **Linux:** ask them to run `npm start` in a terminal in this folder (there's no reliable way to open one for them).
+On Linux, if it says no terminal emulator was found, ask them to run `npm start` in a terminal in this folder.
 
-If `npm run status` already shows the server as `OK`, it's running: skip this.
+Then run `npm run status` and check that the server line says `OK`.
 
-Then run `npm run status` again (give it a few seconds) and check that the server line says `OK`.
-
-If the server line stays `MISSING`: on Windows and macOS, ask the user what the new terminal window shows. If port
+If it stays `MISSING`: ask the user what the new terminal window shows. If port
 4777 is taken by something else, they can pick another port with the `OFFICE_PORT` environment variable; don't stop
 or kill anything yourself.
 
