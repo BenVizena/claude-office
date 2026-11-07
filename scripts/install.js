@@ -144,7 +144,7 @@ When a write starts a new board for your directory, the CLI says so: if that was
   and why. If one shouldn't go ahead as written any more, \`block\` it with the reason. In a sequence run from the
   board, the next session starts from your note.
 - **Titles are short and imperative; the summary is one line of context** (why it matters / where it stands) that
-  the user sees under the title. Fix unclear titles, stale summaries or wrong priorities with \`edit\`.
+  the user sees under the title (over 200 characters it is shortened and the full text kept as background). Fix unclear titles, stale summaries or wrong priorities with \`edit\`.
 - **Leave background only when it helps the user understand** — the root cause you found, the key error log,
   the important snippet, a decision and its reason. Keep it short; don't dump whole files or routine output.
 - **Done means done**: verified, not just written. Then \`done <id>\` (your claim is recorded as the completer).

@@ -44,7 +44,6 @@ describe('boards', () => {
     assert.throws(() => addItem(s, null, { text: '   ' }), /cannot be empty/);
     assert.throws(() => addItem(s, null, { text: 'x'.repeat(301) }), /under 300/);
     assert.throws(() => addItem(s, null, { text: 'ok', priority: 'urgent' }), /priority must be/);
-    assert.throws(() => addItem(s, null, { text: 'ok', summary: 'y'.repeat(201) }), /under 200/);
     assert.equal(readBoard(s).items.length, 0, 'nothing written on a validation error');
   });
 
@@ -84,6 +83,25 @@ describe('status changes', () => {
     const r = updateItem(s, it.id, { status: 'todo' });
     assert.equal(r.completedAt, undefined);
     assert.equal(r.completedBy, undefined);
+  });
+
+  test('a too-long summary is shortened and the full text kept as background', () => {
+    const s = fresh();
+    const long = ('word '.repeat(60) + 'end').trim();
+    const it = addItem(s, null, { text: 'a', summary: long, by: 'me' });
+    const sum = get(s, it.id).summary;
+    assert.ok(sum.length <= 200 && sum.endsWith('…') && !sum.includes('wor…'), sum);
+    assert.match(it.hint, /shortened/);
+    const d = readDetails(s, it.id);
+    assert.equal(d.length, 1);
+    assert.equal(d[0].text, long);
+    assert.equal(d[0].title, 'Full summary');
+    const up = updateItem(s, it.id, { summary: 'x'.repeat(250), by: 'me' });
+    assert.equal(get(s, it.id).summary.length, 200);
+    assert.match(up.hint, /shortened/);
+    assert.equal(readDetails(s, it.id).length, 2);
+    updateItem(s, it.id, { summary: 'short', by: 'me' });
+    assert.equal(readDetails(s, it.id).length, 2, 'a short summary adds no background');
   });
 
   test('summary can be edited and cleared', () => {
