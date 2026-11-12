@@ -7,7 +7,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { CLAUDE_DIR, HOOK_FILE, HOOK_SRC } from '../server/config.js';
+import { CLAUDE_DIR, HOOK_FILE, HOOK_SRC, HOOK_REPO_FILE, REPO_DIR } from '../server/config.js';
 
 const INSTALL = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'install.js');
 const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
@@ -45,6 +45,7 @@ describe('install.js', () => {
     assert.ok(cmd.startsWith(`"${process.execPath.replace(/\\/g, '/')}"`), 'runs the absolute node path');
     assert.ok(cmd.includes(HOOK_FILE.replace(/\\/g, '/')), 'runs the copied hook, not the repo file');
     assert.ok(fs.readFileSync(HOOK_FILE).equals(fs.readFileSync(HOOK_SRC)));
+    assert.deepEqual(JSON.parse(fs.readFileSync(HOOK_REPO_FILE, 'utf8')), { repo: REPO_DIR }, 'the copy is told where the repo is');
     assert.deepEqual(JSON.parse(fs.readFileSync(`${SETTINGS}.office-backup`, 'utf8')), OTHER);
   });
 
@@ -87,6 +88,7 @@ describe('install.js', () => {
     assert.deepEqual(settings(), OTHER);
     assert.equal(fs.existsSync(SKILL), false);
     assert.equal(fs.existsSync(HOOK_FILE), false);
+    assert.equal(fs.existsSync(HOOK_REPO_FILE), false);
   });
 
   test('an unreadable settings.json is left alone', () => {

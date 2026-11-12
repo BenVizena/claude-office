@@ -10,8 +10,9 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { SETTINGS_FILE } from '../server/config.js';
-import { readBoard } from '../server/todos.js';
+import { readBoard, addItem, claimItem } from '../server/todos.js';
 import { LOG_FILE } from '../server/log.js';
+import { writeEvent } from '../server/events.js';
 
 const SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server', 'index.js');
 
@@ -87,16 +88,34 @@ describe('server HTTP API', () => {
       assert.equal((await request('POST', '/api/settings', { body: {}, headers: { 'X-Office': '0' } })).status, 403);
     });
 
-    test('the hook endpoint refuses anything a browser could send', async () => {
-      const ok = { session_id: 'hook-sess', hook_event_name: 'Stop', cwd: TEST_HOME };
-      let r = await request('POST', '/api/hook', { body: ok, headers: { Origin: 'http://evil.example' } });
-      assert.equal(r.status, 403);
-      r = await request('POST', '/api/hook', { body: JSON.stringify(ok), headers: { 'Content-Type': 'text/plain' } });
-      assert.equal(r.status, 403, 'a simple (preflight-free) content type is refused');
-      r = await request('POST', '/api/hook', { body: ok });
-      assert.equal(r.status, 200, 'no X-Office needed from the hook');
-      assert.equal(r.body.ok, true);
-      assert.deepEqual((await request('POST', '/api/hook', { body: { hook_event_name: 'Stop' } })).body, { ok: false });
+    test('there is no hook endpoint: session events arrive as files, and viewers hear of them at once', async () => {
+      assert.equal((await request('POST', '/api/hook', { body: { session_id: 'hook-sess', hook_event_name: 'Stop' } })).status, 404);
+      const heard = new Promise((resolve, reject) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/`, { headers: { Host: `localhost:${port}` } });
+        const timer = setTimeout(() => { ws.close(); reject(new Error('no event within 5s')); }, 5000);
+        ws.on('message', (m) => {
+          const msg = JSON.parse(m);
+          if (msg.type === 'state') writeEvent('hook-sess', { event: 'Stop', cwd: TEST_HOME, message: 'all done' });
+          if (msg.type !== 'event') return;
+          clearTimeout(timer); ws.close(); resolve(msg);
+        });
+        ws.on('error', reject);
+      });
+      assert.deepEqual(await heard, { type: 'event', event: 'Stop', sessionId: 'hook-sess', message: 'all done' });
+    });
+
+    test('claims follow the session: ended when it ends, its own again when it is back', async () => {
+      const it = addItem('office', { name: 'Whole office' }, { text: 'Held by a session' });
+      claimItem('office', it.id, { by: 'claude claim-sess', session: 'claim-sess' });
+      const claim = () => readBoard('office').items.find((x) => x.id === it.id).claim;
+      const until = async (ok, what) => {
+        for (const end = Date.now() + 5000; Date.now() < end;) { if (ok()) return; await new Promise((r) => setTimeout(r, 50)); }
+        assert.fail(what);
+      };
+      writeEvent('claim-sess', { event: 'SessionEnd', at: 1234 });
+      await until(() => claim().ended === 1234, 'the claim was not marked ended');
+      writeEvent('claim-sess', { event: 'Stop' }); // any sign of life after an end: it was resumed
+      await until(() => !claim().ended, 'the claim was not given back');
     });
 
     test('websockets need a local host and a local (or no) origin', async () => {

@@ -19,11 +19,22 @@ export const PORT = Number(process.env.OFFICE_PORT) || 4777;
 // install-hooks copies the hook here so moving or deleting the clone can't break Claude Code
 export const HOOK_SRC = path.join(REPO_DIR, 'hooks', 'office-hook.mjs');
 export const HOOK_FILE = path.join(HOME, '.claude-office', 'office-hook.mjs');
+// next to the copy: where the repo is, so the hook can load the office's board news code from it
+export const HOOK_REPO_FILE = path.join(HOME, '.claude-office', 'office-repo.json');
+
+/** Tells the installed hook where this clone is (a moved clone is picked up the next time the office starts). */
+export function writeHookRepo() {
+  const data = JSON.stringify({ repo: REPO_DIR });
+  try { if (fs.readFileSync(HOOK_REPO_FILE, 'utf8') === data) return; } catch { /* not written yet */ }
+  fs.mkdirSync(path.dirname(HOOK_REPO_FILE), { recursive: true });
+  fs.writeFileSync(HOOK_REPO_FILE, data);
+}
 
 /** Refresh the installed hook copy after a `git pull` changed it (only if hooks are installed). */
 export function syncHookCopy() {
   try {
     if (!fs.existsSync(HOOK_FILE)) return false;
+    writeHookRepo();
     const src = fs.readFileSync(HOOK_SRC);
     if (src.equals(fs.readFileSync(HOOK_FILE))) return false;
     fs.writeFileSync(HOOK_FILE, src);

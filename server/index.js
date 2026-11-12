@@ -68,13 +68,6 @@ const routes = {
   'GET /api/state': async () => office.getState(),
   'GET /api/usage': async () => actions.usage(),
 
-  // Claude Code hooks (from hooks/office-hook.mjs). No browser origin allowed.
-  'POST /api/hook': async (b, req) => {
-    // Browsers always send Origin on cross-site POSTs, and an application/json body forces a CORS preflight we never approve.
-    if (req.headers.origin || !/^application\/json\b/i.test(req.headers['content-type'] || '')) throw Object.assign(new Error('forbidden'), { code: 403 });
-    return office.hookEvent(b);
-  },
-
   'GET /api/todos/details': async (b, req) => actions.todoDetails(query(req)),
   'GET /api/results': async (b, req) => actions.results(query(req)),
   'POST /api/results/remove': async (b) => actions.removeResults(b),
@@ -102,7 +95,7 @@ const server = http.createServer(async (req, res) => {
   const handler = routes[key];
   if (handler) {
     // Block cross-site requests: browsers can't add this header without a CORS preflight we never approve.
-    if (req.method === 'POST' && url.pathname !== '/api/hook' && req.headers['x-office'] !== '1') return json(res, 403, { error: 'forbidden' });
+    if (req.method === 'POST' && req.headers['x-office'] !== '1') return json(res, 403, { error: 'forbidden' });
     try {
       const body = req.method === 'POST' ? await readBody(req) : null;
       json(res, 200, await handler(body, req));

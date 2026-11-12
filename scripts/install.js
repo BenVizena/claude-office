@@ -8,11 +8,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
-import { CLAUDE_DIR, REPO_DIR, HOOK_SRC, HOOK_FILE, PORT, loadSettings, resolveBlender } from '../server/config.js';
+import { CLAUDE_DIR, REPO_DIR, HOOK_SRC, HOOK_FILE, HOOK_REPO_FILE, writeHookRepo, PORT, loadSettings, resolveBlender } from '../server/config.js';
 
 const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
-// The hook has no imports, so it's copied out of the repo: moving or deleting the clone can't break Claude Code.
-// The server refreshes the copy on startup when a pull changed it (syncHookCopy).
+// The hook only imports Node's own modules up front, so it's copied out of the repo: moving or deleting the clone
+// can't break Claude Code (it then just has no board news to add). office-repo.json next to it says where the clone
+// is. The office refreshes both on startup (syncHookCopy).
 const HOOK_DIR = path.dirname(HOOK_FILE);
 const HOOK = HOOK_FILE.replace(/\\/g, '/');
 // Absolute node path: nvm/fnm/asdf only put `node` on PATH in interactive shells, and Claude Code started from an
@@ -52,6 +53,7 @@ function stripOurs(s) {
 function installHooks() {
   fs.mkdirSync(HOOK_DIR, { recursive: true });
   fs.copyFileSync(HOOK_SRC, HOOK_FILE);
+  writeHookRepo();
   const s = stripOurs(readSettings());
   s.hooks ||= {};
   for (const [ev, matcher] of Object.entries(EVENTS)) {
@@ -328,6 +330,7 @@ else if (cmd === 'setup') {
   writeSettings(stripOurs(readSettings()));
   fs.rmSync(SKILL_DIR, { recursive: true, force: true });
   fs.rmSync(HOOK_FILE, { force: true });
+  fs.rmSync(HOOK_REPO_FILE, { force: true });
   console.log('Removed Claude Office hooks and the office-todo skill.');
 } else {
   console.log('usage: node scripts/install.js setup|status|hooks|skill|uninstall');

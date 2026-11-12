@@ -1,7 +1,9 @@
 // The office itself, with no way in or out but function calls: it watches Claude Code transcripts + git, keeps the
 // office model up to date, runs sequences, and carries out what the user asks (the actions below). A front end
 // (the web server in index.js) shows the model and calls the actions. Nothing here opens a socket or a port.
-import { normPath, nativePath, loadSettings, saveSettings, resolveBlender, syncHookCopy } from './config.js';
+import fs from 'node:fs';
+import { normPath, loadSettings, saveSettings, resolveBlender, syncHookCopy } from './config.js';
+import { EventReader, pruneEvents, EVENTS_DIR } from './events.js';
 import { SessionScanner } from './scanner.js';
 import { buildOffice } from './office.js';
 import { Catalog, DecorStore } from './decor.js';
@@ -12,8 +14,7 @@ import { startRun, stopRun, makeRunner, dropRequest, runsOf, liveRuns, MAX_RUNS 
 import * as gitwork from './gitwork.js';
 import { noteLaunch, launchesToday, sessionRunPolicy } from './runpolicy.js';
 import { setStatus } from './status.js';
-import { boardNews } from './nudges.js';
-import { ack as ackNews, markEnded as markNewsEnded, scanAll } from './news.js';
+import { markEnded as markNewsEnded, scanAll } from './news.js';
 import { startOnItem, assertStartable, closeSessionWindow, LAUNCH_PERMISSION_MODES } from './launch.js';
 import { computeUsage } from './usage.js';
 import { useNonBlockingLocks, whenUnlocked } from './lock.js';
@@ -138,6 +139,7 @@ export function createOffice({ onState = () => {}, onEvent = () => {} } = {}) {
   function poll() {
     // one failed pass (a file that vanished mid-read, say) must not take the office down: the next pass tries again
     try {
+      takeEvents();
       // not before the first office model is built: until then no room is known, so launches and requests would fail
       if (state && Date.now() - lastSeq > 3000) { lastSeq = Date.now(); runSequences(); }
       if (scanner.scan()) dirty = true;
@@ -148,31 +150,50 @@ export function createOffice({ onState = () => {}, onEvent = () => {} } = {}) {
     }
   }
 
-  /** A Claude Code hook event (see hooks/office-hook.mjs). Resolves to what the hook should be told. */
-  async function hookEvent(b) {
-    if (!b.session_id) return { ok: false };
-    // the hook printed the news we gave it: it can leave the outbox
-    if (b.ack !== undefined) { await whenUnlocked(() => ackNews(b.session_id, b.ack)); markDirty(); return { ok: true }; }
-    hooks.set(b.session_id, { event: b.hook_event_name, at: Date.now(), tool: b.tool_name, message: b.message, kind: typeof b.notification_type === 'string' ? b.notification_type.slice(0, 40) : undefined, cwd: nativePath(b.cwd) });
-    if (['SessionStart', 'Stop', 'SessionEnd', 'UserPromptSubmit', 'Notification', 'PreCompact', 'PermissionRequest'].includes(b.hook_event_name)) {
-      scanner.scan();
-      onEvent({ event: b.hook_event_name, sessionId: b.session_id, message: b.message || null });
+  // ---- session events (the files a session's hook writes, see events.js) ----
+  const events = new EventReader();
+  const alive = new Set(); // sessions whose claims we have marked as their own since their last start
+  const markClaims = (session, ended) => whenUnlocked(() => markSessionClaims(session, ended))
+    .then((n) => { if (n) markDirty(); })
+    .catch((e) => console.error('claim update failed:', e.message));
+
+  /** Events from before the office started: where each session stands, and claims of sessions that ended meanwhile. */
+  function loadEvents() {
+    const past = events.changes();
+    for (const { session, hook } of past) hooks.set(session, hook);
+    const ended = new Map(past.filter((p) => p.hook.event === 'SessionEnd').map((p) => [p.session, p.hook.at]));
+    if (!ended.size) return;
+    const holding = new Set();
+    for (const bd of listBoards()) for (const it of bd.items) if (it.claim && !it.claim.ended && it.status !== 'done' && ended.has(it.claim.session)) holding.add(it.claim.session);
+    for (const session of holding) markClaims(session, ended.get(session));
+  }
+
+  /** Takes in the events written since the last look. */
+  function takeEvents() {
+    let nudge = false;
+    for (const { session, hook } of events.changes()) {
+      hooks.set(session, hook);
+      const ev = hook.event;
+      if (['SessionStart', 'Stop', 'SessionEnd', 'UserPromptSubmit', 'Notification', 'PreCompact', 'PermissionRequest'].includes(ev)) {
+        scanner.scan();
+        onEvent({ event: ev, sessionId: session, message: hook.message || null });
+      }
+      // claims follow the session's life: ended -> anyone may take them over; back (resume) or started (a ▶ launch) ->
+      // they're its own again. Only a session's last event is kept, so any sign of life counts when we haven't
+      // seen one since it started.
+      if (ev === 'SessionEnd') {
+        alive.delete(session);
+        markClaims(session, hook.at);
+        // its news file stays for a resume; just note that it ended
+        whenUnlocked(() => markNewsEnded(session)).catch((e) => console.error('news end failed:', e.message));
+      } else if (ev === 'SessionStart' || ev === 'UserPromptSubmit' || !alive.has(session)) {
+        alive.add(session);
+        markClaims(session, null);
+      }
+      if (ev === 'Stop' || ev === 'SessionEnd') nudge = true;
+      markDirty();
     }
-    const ev = b.hook_event_name;
-    // board news first: the hook gives up after 800 ms, and the claim update below may wait on a board's lock
-    const news = ev === 'SessionEnd' ? null : await boardNews(b.session_id, ev, nativePath(b.cwd));
-    // its news file stays for a resume; just note that it ended
-    if (ev === 'SessionEnd') whenUnlocked(() => markNewsEnded(b.session_id)).catch((e) => console.error('news end failed:', e.message));
-    // claims follow the session's life: ended -> anyone may take them over; back (resume) or started (a ▶ launch) ->
-    // they're its own again. Not awaited, so a busy lock never holds up the hook.
-    if (ev === 'SessionEnd' || ev === 'SessionStart' || ev === 'UserPromptSubmit') {
-      whenUnlocked(() => markSessionClaims(b.session_id, ev === 'SessionEnd' ? Date.now() : null))
-        .then((n) => { if (n) markDirty(); })
-        .catch((e) => console.error('claim update failed:', e.message));
-    }
-    if (state && (ev === 'Stop' || ev === 'SessionEnd')) setTimeout(runSequences, 500); // a sequence step may be able to move on
-    markDirty();
-    return news ? { ok: true, context: news.context, upTo: news.upTo } : { ok: true };
+    if (nudge && state) setTimeout(runSequences, 500); // a sequence step may be able to move on
   }
 
   // ---- what the user can ask of the office. Each takes one plain object and throws an Error with a readable message. ----
@@ -388,11 +409,18 @@ export function createOffice({ onState = () => {}, onEvent = () => {} } = {}) {
     /** The latest office model, or null before the first one is built. */
     getState: () => state,
     actions,
-    hookEvent,
     /** Start watching: a first scan and office model now, then the polling loop (which also runs sequences). */
     start() {
       if (timer) return;
+      pruneEvents();
+      loadEvents();
       timer = setInterval(poll, 1200);
+      // react to a session's event as it is written, not at the next pass (the pass still catches whatever this misses)
+      try {
+        let soon = null;
+        const look = () => { soon = null; try { takeEvents(); } catch (e) { console.error('reading events failed:', e); } };
+        fs.watch(EVENTS_DIR, () => { soon ||= setTimeout(look, 40); }).on('error', () => { /* the polling pass covers it */ });
+      } catch { /* no folder watching here: the polling pass covers it */ }
       scanner.scan();
       rebuild();
     },
