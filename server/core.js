@@ -24,6 +24,7 @@ import { listRuns, runSummary, loadRun, imagePath, removeRun } from './results.j
 import { startLog } from './log.js';
 import { takeInstanceLock, OfficeRunning } from './instance.js';
 import { writeSnapshot } from './snapshot.js';
+import { reapSteps, stopBackground, pruneSteps } from './steps.js';
 
 /**
  * Sets the office up (log file, crash handlers, settings, scanner) and returns it. Nothing is watched until start().
@@ -85,7 +86,7 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
       state.checksRunning = [...checksRunning];
       attachNews(state, boards);
       state.settings = { soundHint: true, showBackgroundSessions: settings.showBackgroundSessions, blender: !!resolveBlender(settings),
-        sessionRuns: settings.sessionRuns, sessionRunDailyCap: settings.sessionRunDailyCap, launchPermissionMode: settings.launchPermissionMode || '', autoApproveChecks: !!settings.autoApproveChecks, mergeStyle: settings.mergeStyle || 'merge', closeFinishedSteps: settings.closeFinishedSteps !== false,
+        sessionRuns: settings.sessionRuns, sessionRunDailyCap: settings.sessionRunDailyCap, launchPermissionMode: settings.launchPermissionMode || '', autoApproveChecks: !!settings.autoApproveChecks, mergeStyle: settings.mergeStyle || 'merge', closeFinishedSteps: settings.closeFinishedSteps !== false, stepRunner: settings.stepRunner || 'window',
         defaultAgent: settings.defaultAgent || DEFAULT_AGENT, agents: listAgents(settings) };
       writeSnapshot(state, mode);
       onState(state);
@@ -142,7 +143,8 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
       launch: async ({ slug, id, worktree, step, max, run, branch }) => {
         // the agent the sequence was started with (an older run has none: the default; one that is gone stops the run, saying so)
         const agent = agentFor(run.agent, settings);
-        const r = await whenUnlocked(() => startOnItem({ room: findRoom(slug), id, worktree, agent, permissionMode: settings.launchPermissionMode, step: { n: step, max, branch } }));
+        const r = await whenUnlocked(() => startOnItem({ room: findRoom(slug), id, worktree, agent, permissionMode: settings.launchPermissionMode,
+          step: { n: step, max, branch, background: settings.stepRunner === 'background' } }));
         await whenUnlocked(() => noteLaunch(r.session, { fromSession: !!run.bySession, board: slug, item: id })).catch((e) => console.error('run log:', e.message));
         return r;
       },
@@ -154,7 +156,8 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
       mergeStyle: () => settings.mergeStyle,
       git: gitwork,
       notify,
-      closeSession: (session, agent) => (settings.closeFinishedSteps ? agentFor(agent, settings).close(session) : null),
+      // a background step has no window to keep for the user: whatever is left of it is ended
+      closeSession: async (session, agent) => ((await stopBackground(session)) || !settings.closeFinishedSteps ? null : agentFor(agent, settings).close(session)),
       onRequest: (slug) => handleRequest(slug),
       changed: () => markDirty(),
     },
@@ -169,6 +172,7 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
     try {
       // the user may change a setting from the CLI (office-todo settings), which writes the file
       if (stampOf() !== settingsStamp) { readSettings(); markDirty(); }
+      reapSteps(); // a background step whose process died without saying so: its ended event is written here
       takeEvents();
       // not before the first office model is built: until then no room is known, so launches and requests would fail
       if (state && Date.now() - lastSeq > 3000) { lastSeq = Date.now(); runSequences(); }
@@ -436,6 +440,7 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
     start() {
       if (timer) return;
       pruneEvents();
+      pruneSteps();
       loadEvents();
       timer = setInterval(poll, 1200);
       // react to a session's event as it is written, not at the next pass (the pass still catches whatever this misses)

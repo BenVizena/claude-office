@@ -18,9 +18,12 @@ export function piAgent(settings = {}) {
     // what Pi puts in the environment of the commands it runs: an office started from inside a Pi session must not
     // pass them on, or the sessions it starts would be taken for that one
     clearEnv: ['PI_SESSION_ID', 'PI_SESSION_FILE', 'PI_CODING_AGENT'],
-    command({ session, prompt }) {
+    // background: print mode, said outright (Pi would pick it by itself without a terminal, but that is not relied
+    // on), and -na so a project with a .pi folder is not asked about: there is nobody to answer, and the step would
+    // hang. Trust-gated project-local .pi files are then ignored.
+    command({ session, prompt, background = false }) {
       const model = settings.piModel ? checkPiModel(settings.piModel) : '';
-      return ['pi', ...(model ? ['--model', model] : []), '--session-id', session, prompt];
+      return ['pi', ...(background ? ['-p'] : []), ...(model ? ['--model', model] : []), '--session-id', session, ...(background ? ['-na'] : []), prompt];
     },
     // finds the pi process by the --session-id it was started with, as for claude
     close: (session) => killByCommandLine(session, { before: 'session-id' }),

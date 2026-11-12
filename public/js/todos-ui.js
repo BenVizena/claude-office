@@ -153,6 +153,8 @@ const LAUNCH_MODES = {
 
 const MERGE_STYLES = { merge: 'a merge commit each', squash: 'one squashed commit each', rebase: 'rebased commits (linear)' };
 
+const STEP_RUNNERS = { window: 'a terminal window', background: 'the background (log file)' };
+
 /** Office-wide settings for sessions the office starts, shown at the top of a project board. */
 export function boardSettingsHtml(settings = {}) {
   const runs = { off: 'only me', ask: 'sessions may ask (I approve)', allowed: 'sessions may start them' };
@@ -169,6 +171,8 @@ export function boardSettingsHtml(settings = {}) {
         <select data-merge-style>${Object.entries(MERGE_STYLES).map(([k, l]) => `<option value="${k}" ${k === (settings.mergeStyle || 'merge') ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <label title="Once a sequence step is done (checked and merged), the office closes its terminal window. Steps that fail or stop keep theirs open. The transcript is kept either way.">
         <input type="checkbox" data-close-steps ${settings.closeFinishedSteps !== false ? 'checked' : ''} /> close finished steps' terminals</label>
+      <label title="Where a sequence step runs. A terminal window: you can watch it and answer it. In the background: no window (for an office with no desktop); the agent runs non-interactively, so nobody can answer a permission prompt, and its output goes to a log file named in the sequence's log.">Steps run in:
+        <select data-step-runner>${Object.entries(STEP_RUNNERS).map(([k, l]) => `<option value="${k}" ${k === (settings.stepRunner || 'window') ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     </div>`;
 }
 

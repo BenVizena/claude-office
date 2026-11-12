@@ -325,10 +325,10 @@ export function recordCheck(slug, id, { ok, code, ms }) {
 }
 
 /** Where a ▶ launch put the item's session (its check runs there). */
-export function recordLaunch(slug, id, { session, worktree }) {
+export function recordLaunch(slug, id, { session, worktree, log }) {
   return mutate(slug, null, (b) => {
     const it = find(b, id);
-    it.launch = { session, worktree, at: Date.now() };
+    it.launch = { session, worktree, at: Date.now(), ...(log ? { log } : {}) }; // log: a background step's output (steps.js)
     return { ...it };
   });
 }

@@ -260,8 +260,8 @@ async function processStep(slug, board, run, step, ctx, now) {
   }
   if (it.status === 'blocked') return { fail: `"${it.text}" was marked blocked${it.note ? `: ${it.note}` : ''}` };
   if (!it.claim || it.claim.session !== step.session) return { fail: `"${it.text}" was ${it.claim ? 'taken over by someone else' : 'released or reopened'} before it was done` };
-  if (it.claim.ended) return { fail: `the session on "${it.text}" ended before it was done` };
-  if (it.claim.pending && claimIsStale(it.claim, now)) return { fail: `the session for "${it.text}" never started (check its terminal window)` };
+  if (it.claim.ended) return { fail: `the session on "${it.text}" ended before it was done${it.launch?.log && it.launch.session === step.session ? ` (its log: ${it.launch.log})` : ''}` };
+  if (it.claim.pending && claimIsStale(it.claim, now)) return { fail: `the session for "${it.text}" never started (check its ${it.launch?.log ? `log: ${it.launch.log}` : 'terminal window'})` };
   return 'working';
 }
 
@@ -348,7 +348,7 @@ async function tickRun(slug, rid, ctx) {
       const launched = await ctx.launch({ slug, id: next.id, worktree: wt?.worktree || run.worktree, step: run.launched, max: run.max, run, branch: wt });
       run = await patchStep(slug, rid, next.id, (s, r) => {
         Object.assign(s, { session: launched.session, at: Date.now(), phase: 'working' }, wt || {});
-        logLine(r, `step ${r.launched}: started "${next.text}"${wt ? ` in ${wt.worktree} on ${wt.branch}` : ''}`);
+        logLine(r, `step ${r.launched}: started "${next.text}"${wt ? ` in ${wt.worktree} on ${wt.branch}` : ''}${launched.log ? ` in the background (log: ${launched.log})` : ''}`);
       });
       did = 'launched';
     } catch (e) {

@@ -80,6 +80,10 @@ const DEFAULT_SETTINGS = {
   // close the terminal window of a sequence step once it is done, checked and merged (its turn is over). Steps that
   // fail or stop keep theirs open, so the user can talk to the session.
   closeFinishedSteps: true,
+  // how a sequence step runs: 'window' (a terminal window, where the user can watch and answer it) or 'background'
+  // (a process with no window, for an office with no desktop: the agent's non-interactive form, its output in
+  // ~/.claude/office/steps/<session>.log; see server/steps.js). A ▶ session is always a window. STEP_RUNNERS.
+  stepRunner: 'window',
   // the coding agent the office starts on board items (▶ and sequence steps; a sequence can name another): 'claude', 'pi',
   // or an id from `agents`. See server/agents/index.js.
   defaultAgent: 'claude',

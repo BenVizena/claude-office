@@ -2,6 +2,7 @@
 // server/agents) in one of the project's worktrees, with a new session id that is claimed on the item before it starts. It is an ordinary session: the user
 // sees it, approves its permissions (in the mode settings.launchPermissionMode picks) and can talk to it. Nothing the user typed goes on the command line —
 // the prompt only names the item id and board, and the session reads the item itself with office-todo.
+// A sequence step can instead run as a background process with no window (settings.stepRunner, see steps.js).
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -11,6 +12,7 @@ import { claimItem, releaseItem, readBoard, claimIsStale, recordLaunch } from '.
 import { subscribe } from './news.js';
 import { RUN_ENV } from './runpolicy.js';
 import { agentFor, CLEAR_ENV, OFFICE_SESSION_ENV, OFFICE_AGENT_ENV } from './agents/index.js';
+import { startBackground } from './steps.js';
 
 const LAUNCH_DIR = path.join(STAFF_DIR, '..', 'launch');
 const CLI = path.join(REPO_DIR, 'bin', 'office-todo.js').replace(/\\/g, '/');
@@ -39,6 +41,10 @@ export function promptFor(board, id, step, own) {
       + 'do not start `wait`. Do only this item: once it '
       + 'is done (handoff notes left), end your turn and stop. The office then runs its check and starts the next item in a new '
       + 'session, so do not start other items or sequences yourself.' : '')
+    // a background step: its output goes to a log and its input is closed
+    + (step?.background ? ' You run as a background process: nobody sees your output as you work or can answer a question, and your '
+      + 'session ends with this turn. So do not ask and wait: decide what you reasonably can and note the decision on the item with '
+      + '`context`; if the item cannot go on without the user, `block` it with the question (or leave what you found and release it).' : '')
     + (step?.branch ? ` You are in your own git worktree (${step.branch.worktree}) on branch ${step.branch.branch}, made for this item `
       + `from ${step.branch.baseBranch}; other items of the sequence may be running in parallel in their own worktrees. Work only in `
       + 'this folder and COMMIT your work on this branch before you mark the item done: the office merges the branch into '
@@ -64,6 +70,8 @@ export function assertStartable(room, id) {
  * Throws with a readable message when the item can't be started. Returns { session, worktree }. `own` is a worktree
  * the office just made for a plain ▶ start ({ worktree, branch, baseBranch }, from gitwork.createStepWorktree).
  * `agent` is the adapter to start (agents/index.js agentFor); without one, Claude Code.
+ * A step with step.background runs with no window (steps.js): the agent in its non-interactive form, its output in a
+ * log file, which is returned as `log` and kept on the item (item.launch.log).
  */
 export function startOnItem({ room, id, worktree, agent = agentFor('claude'), step, own, permissionMode = '' }) {
   if (room?.kind !== 'project') throw new Error('sessions can only be started on a project board');
@@ -82,18 +90,23 @@ export function startOnItem({ room, id, worktree, agent = agentFor('claude'), st
   // follow the item from now, so news from before the session's first hook isn't missed (best effort: never retried,
   // since a retry would launch a second session)
   try { subscribe(session, readBoard(room.key), id, 'claim'); } catch { /* the office subscribes it on its first hook */ }
-  try { recordLaunch(room.key, id, { session, worktree: pod.path }); } catch { /* only used to pick where its check runs */ }
+  const background = !!step?.background;
+  let log = null;
   try {
-    openTerminal({ cwd: pod.path, argv: agent.command({ session, prompt: promptFor(room.key, id, step, own), permissionMode }),
+    const opts = { cwd: pod.path, argv: agent.command({ session, prompt: promptFor(room.key, id, step, own), permissionMode, background }),
       title: `${agent.label}: ${room.name} ${id}${step ? ` (step ${step.n})` : ''}`, name: session, session,
       env: { [OFFICE_SESSION_ENV]: session, [OFFICE_AGENT_ENV]: agent.id, ...(step ? { [RUN_ENV]: '1' } : {}) },
       // a step's window goes away with its session (the office ends it once the step is merged: the adapter's close)
-      closeOnExit: !!step });
+      closeOnExit: !!step };
+    if (background) ({ log } = startBackground({ file: writeLauncher(opts), cwd: pod.path, session, agent: agent.id }));
+    else openTerminal(opts);
   } catch (e) {
     releaseItem(room.key, id, { by: 'office' });
     throw e;
   }
-  return { session, worktree: pod.path };
+  // (where its check runs and, for a background step, where its output is)
+  try { recordLaunch(room.key, id, { session, worktree: pod.path, ...(log ? { log } : {}) }); } catch { /* the item still runs */ }
+  return { session, worktree: pod.path, ...(log ? { log } : {}) };
 }
 
 // ---- opening a terminal window, per platform ----

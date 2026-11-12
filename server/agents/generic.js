@@ -3,6 +3,9 @@
 // {prompt} becomes the office's prompt for the item (one argument, however long) and {session} the session id the
 // office made. Such an agent has no hooks: the launcher script's own start and ended events are all the office sees,
 // and the office-todo CLI knows the session from OFFICE_SESSION_ID.
+// An agent whose non-interactive form differs can give it as well, for steps run as background processes
+// (settings.stepRunner): {"aider":{"command":"aider --message {prompt}","background":"aider --yes --message {prompt}"}}.
+// Without one, a background step runs the same command, with its input closed.
 import { killByCommandLine } from './proc.js';
 
 /** A command line as its arguments: split on spaces, with "double" and 'single' quotes keeping spaces. */
@@ -20,21 +23,26 @@ export function splitCommand(text) {
   return out;
 }
 
-/** def: the command template (a string, or its arguments as a list), or { command, label? }. Throws if it can't be used. */
+/** def: the command template (a string, or its arguments as a list), or { command, background?, label? }. Throws if it can't be used. */
 export function genericAgent(id, def) {
   const d = def && typeof def === 'object' && !Array.isArray(def) ? def : { command: def };
-  let template;
-  try { template = Array.isArray(d.command) ? d.command.map(String) : splitCommand(d.command ?? ''); }
-  catch (e) { throw new Error(`agent "${id}": ${e.message}`); }
-  if (!template.length || !template[0] || /\{(prompt|session)\}/.test(template[0])) throw new Error(`agent "${id}" needs a command, like "aider --message {prompt}"`);
-  if (!template.some((a) => a.includes('{prompt}'))) throw new Error(`agent "${id}": its command needs {prompt} where the office's prompt goes`);
+  const parse = (command, what) => {
+    let t;
+    try { t = Array.isArray(command) ? command.map(String) : splitCommand(command ?? ''); }
+    catch (e) { throw new Error(`agent "${id}": ${e.message}`); }
+    if (!t.length || !t[0] || /\{(prompt|session)\}/.test(t[0])) throw new Error(`agent "${id}" needs a ${what}, like "aider --message {prompt}"`);
+    if (!t.some((a) => a.includes('{prompt}'))) throw new Error(`agent "${id}": its ${what} needs {prompt} where the office's prompt goes`);
+    return t;
+  };
+  const template = parse(d.command, 'command');
+  const inBackground = d.background === undefined ? template : parse(d.background, 'background command');
   return {
     id,
     label: typeof d.label === 'string' && d.label.trim() ? d.label.trim().slice(0, 40) : id,
     sessionEnv: [],
     clearEnv: [],
     // one pass, so a prompt that happens to hold "{session}" is left as it is
-    command: ({ session, prompt }) => template.map((a) => a.replace(/\{(prompt|session)\}/g, (_, k) => (k === 'prompt' ? prompt : session))),
+    command: ({ session, prompt, background = false }) => (background ? inBackground : template).map((a) => a.replace(/\{(prompt|session)\}/g, (_, k) => (k === 'prompt' ? prompt : session))),
     // the launcher script is named after the session, so this finds it (and the agent, as its child) whatever the
     // template does with {session}
     close: (session) => killByCommandLine(session),

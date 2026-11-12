@@ -5,6 +5,8 @@ import { listAgents, checkAgents } from './agents/index.js';
 import { checkPiModel } from './agents/pi.js';
 import { MERGE_STYLES } from './gitwork.js';
 
+export const STEP_RUNNERS = ['window', 'background'];
+
 const oneOf = (list) => (v, k) => { if (!list.includes(v)) throw new Error(`${k} is one of: ${list.map((m) => m || '(none)').join(', ')}`); return v; };
 const bool = (v, k) => { if (typeof v !== 'boolean') throw new Error(`${k} is true or false`); return v; };
 const any = (v) => v;
@@ -18,6 +20,7 @@ export const USER_SETTINGS = {
     about: 'sessions that sequences started by sessions may launch in 24 hours (1-200)' },
   autoApproveChecks: { type: 'boolean', check: bool, about: 'run checks that sessions set without your approval' },
   closeFinishedSteps: { type: 'boolean', check: bool, about: 'close a sequence step\'s terminal once it is done, checked and merged' },
+  stepRunner: { check: oneOf(STEP_RUNNERS), about: 'how a sequence step runs: window (a terminal window) or background (no window: the agent\'s non-interactive form, its output in a log file; nobody can answer its permission prompts)' },
   launchPermissionMode: { check: oneOf(LAUNCH_PERMISSION_MODES), about: `permission mode for sessions the office starts: ${LAUNCH_PERMISSION_MODES.map((m) => m || '"" (your own default)').join(', ')}` },
   mergeStyle: { check: oneOf(MERGE_STYLES), about: `how a parallel step's branch lands in the base: ${MERGE_STYLES.join(', ')}` },
   defaultAgent: { check: (v, k, s) => oneOf(listAgents(s).map((a) => a.id))(v, k),

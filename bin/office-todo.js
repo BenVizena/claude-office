@@ -131,7 +131,8 @@ function line(it, board, indent = '') {
   const pri = it.priority && it.priority !== 'normal' ? ` [${it.priority}]` : '';
   const claim = it.claim ? `  ← claimed by ${it.claim.session === session && session ? 'you' : it.claim.by}${it.claim.ended ? ' (session ended — free to take over)' : it.claim.pending ? (claimIsStale(it.claim) ? ' (its session never started — free to take over)' : ' (session starting…)') : ''}` : '';
   const note = (it.summary ? `\n${indent}      ${it.summary}` : '') + (it.note ? `\n${indent}      note: ${it.note}` : '')
-    + (it.check ? `\n${indent}      check: ${it.check.cmd}${unapprovedNote(it.check, ' (not approved by the user yet)')}${it.check.last ? ` — last run ${it.check.last.ok ? 'passed' : 'FAILED'}` : ''}` : '');
+    + (it.check ? `\n${indent}      check: ${it.check.cmd}${unapprovedNote(it.check, ' (not approved by the user yet)')}${it.check.last ? ` — last run ${it.check.last.ok ? 'passed' : 'FAILED'}` : ''}` : '')
+    + (it.launch?.log && it.status !== 'done' ? `\n${indent}      background step log: ${it.launch.log}` : '');
   const waits = board.items?.length ? openBlockers(board, it) : [];
   const dep = waits.length ? `  ⛔ waits on ${waits.map((w) => w.id).join(', ')}` : '';
   return `${indent}${MARK[it.status] || '[?]'} ${it.id}  ${it.text}${pri}${prog}${claim}${dep}${note}`;

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { classifyRole, contextWindow, inferStatus } from './scanner.js';
 import { resolveRoot, repoInfo, nestedWorktree, stepItemId } from './git.js';
+import { isBackgroundStep } from './steps.js';
 import { normPath, projectSlug, isStaffPath, CLAUDE_DIR, OFFICE_DIR, readJson, writeJsonAtomic } from './config.js';
 
 const ROOM_SIZES_FILE = path.join(OFFICE_DIR, 'room-sizes.json');
@@ -22,7 +23,8 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
   for (const s of scanner.sessions()) {
     if (isStaffPath(s.cwd)) continue;
     const background = s.entrypoint && s.entrypoint !== 'cli';
-    if (background && !settings.showBackgroundSessions) continue;
+    // (a step the office itself ran in the background is a `claude -p` session too: that one is shown)
+    if (background && !settings.showBackgroundSessions && !isBackgroundStep(s.id)) continue;
     const r = await resolveRoot(s.cwd);
     const key = normPath(r.root);
     if (hidden.has(key)) continue;

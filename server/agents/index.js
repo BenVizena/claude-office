@@ -1,9 +1,11 @@
 // Coding agents the office can start on board items. Each is an adapter:
 //   { id, label,
-//     command({ session, prompt, permissionMode }) -> argv   the whole command line, program first
+//     command({ session, prompt, permissionMode, background }) -> argv   the whole command line, program first;
+//                              background: its non-interactive form (claude -p, pi -p), for a step run with no
+//                              terminal (steps.js): it must do the prompt and exit without reading its input
 //     sessionEnv: [names]      variables the agent sets for the commands it runs, holding its session id
 //     clearEnv: [names]        variables a launched session must not inherit from the office's own environment
-//     close(session)           ends a session the office launched, so its terminal window closes
+//     close(session)           ends a session the office launched in a window, so its terminal window closes
 //     eventKind?(hook)         the agent's own event names as one of EVENT_KINDS (or null)
 //     permissionModes?         the permission modes it can be started in (settings.launchPermissionMode)
 //     installEvents?()         puts its event hook in place (Claude's hook and Pi's extension are installed by scripts/install.js)

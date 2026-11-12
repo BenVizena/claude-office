@@ -7,10 +7,10 @@ import { killByCommandLine } from './proc.js';
 // 'dontAsk' and 'plan' are left out: a session that may not ask, or may not act, can't do a board item on its own.
 export const LAUNCH_PERMISSION_MODES = ['', 'manual', 'acceptEdits', 'auto', 'bypassPermissions'];
 
-/** The claude arguments for a launched session. */
-export function launchArgs({ session, prompt, permissionMode = '' }) {
+/** The claude arguments for a launched session (background: print mode, which runs the prompt and exits). */
+export function launchArgs({ session, prompt, permissionMode = '', background = false }) {
   if (!LAUNCH_PERMISSION_MODES.includes(permissionMode)) throw new Error(`unknown permission mode ${permissionMode}`);
-  return [...(permissionMode ? ['--permission-mode', permissionMode] : []), '--session-id', session, prompt];
+  return [...(background ? ['-p'] : []), ...(permissionMode ? ['--permission-mode', permissionMode] : []), '--session-id', session, prompt];
 }
 
 /** A Notification hook for a session idle at its prompt (notification_type idle_prompt, or its message). */
@@ -41,9 +41,11 @@ export function claudeAgent(settings = {}) {
     // stops saving its transcript, and the office, which finds sessions by their transcripts, never shows it.
     clearEnv: ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT'],
     permissionModes: LAUNCH_PERMISSION_MODES,
-    command({ session, prompt, permissionMode = '' }) {
+    // background: `claude -p`. Nobody can answer a permission prompt there, so what the permission mode doesn't
+    // allow is refused: settings.launchPermissionMode decides how much such a step can do.
+    command({ session, prompt, permissionMode = '', background = false }) {
       const [cmd, pre] = claudeCommand(settings.claudePath || 'claude');
-      return [cmd, ...pre, ...launchArgs({ session, prompt, permissionMode })];
+      return [cmd, ...pre, ...launchArgs({ session, prompt, permissionMode, background })];
     },
     // finds the claude process by the --session-id it was started with (`claude --resume <id>` elsewhere is not
     // matched); the launcher then runs on to its end, so even a Windows Terminal tab closes
