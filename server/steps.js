@@ -101,7 +101,7 @@ export function reapSteps() {
   for (const rec of [...liveSteps().values()]) {
     if (alive(rec.pid)) continue;
     try {
-      if (eventKind(readEvent(rec.session)) !== 'ended') writeEvent(rec.session, { event: 'ended', kind: 'office', cwd: rec.cwd, message: 'its background process is gone' });
+      if (eventKind(readEvent(rec.session)) !== 'ended') writeEvent(rec.session, { event: 'ended', kind: 'office', cwd: rec.cwd, agent: rec.agent || undefined, message: 'its background process is gone' });
     } catch (e) { console.error(`background step ${rec.session}:`, e.message); }
     try { fs.appendFileSync(rec.log, `[office] ${new Date().toISOString()} the process has ended\n`); } catch { /* the log is gone */ }
     markEnded(rec);

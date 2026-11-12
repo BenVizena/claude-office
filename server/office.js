@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { classifyRole, contextWindow, inferStatus } from './scanner.js';
 import { resolveRoot, repoInfo, nestedWorktree, stepItemId } from './git.js';
-import { isBackgroundStep } from './steps.js';
+import { isBackgroundStep, readStep } from './steps.js';
+import { newSession } from './transcript.js';
+import { EVENT_KINDS } from './agents/index.js';
 import { normPath, projectSlug, isStaffPath, CLAUDE_DIR, OFFICE_DIR, readJson, writeJsonAtomic } from './config.js';
 
 const ROOM_SIZES_FILE = path.join(OFFICE_DIR, 'room-sizes.json');
@@ -20,11 +22,15 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
   const hidden = new Set(settings.hiddenProjects.map(normPath));
   const pinned = new Set(settings.pinnedProjects.map(normPath));
 
-  for (const s of scanner.sessions()) {
+  const read = scanner.sessions();
+  for (const s of [...read, ...eventSessions(hooks, new Set(read.map((x) => x.id)))]) {
     if (isStaffPath(s.cwd)) continue;
-    const background = s.entrypoint && s.entrypoint !== 'cli';
+    // Claude Code's transcript says how the session was started; another agent's doesn't, so there only the office's
+    // own background steps are known to be in the background
+    const claude = !s.agent || s.agent === 'claude';
+    const background = claude ? !!(s.entrypoint && s.entrypoint !== 'cli') : isBackgroundStep(s.id);
     // (a step the office itself ran in the background is a `claude -p` session too: that one is shown)
-    if (background && !settings.showBackgroundSessions && !isBackgroundStep(s.id)) continue;
+    if (claude && background && !settings.showBackgroundSessions && !isBackgroundStep(s.id)) continue;
     const r = await resolveRoot(s.cwd);
     const key = normPath(r.root);
     if (hidden.has(key)) continue;
@@ -164,6 +170,27 @@ export async function buildOffice({ scanner, settings, hooks, decor, catalog, st
 }
 
 /**
+ * Sessions the office knows only from their events: an agent with no transcript reader (one made from a command
+ * template, whose launcher writes start and ended), or one whose transcript is not there (yet). Each gets a minimal
+ * session summary, so it has a desk where its claims, status line and results show; tokens and context stay empty.
+ * Only events under the office's own names count (the launcher, the Pi extension, the office itself write those): a
+ * Claude Code session is shown once it has a transcript, as before.
+ */
+export function eventSessions(hooks, known) {
+  const out = [];
+  for (const [id, hook] of hooks) {
+    if (known.has(id) || !EVENT_KINDS.includes(hook?.event)) continue;
+    const step = readStep(id); // a background step's record also says where it runs and which agent it is
+    const cwd = hook.cwd || step?.cwd;
+    if (!cwd) continue;
+    const s = newSession(id, null, hook.agent || step?.agent || 'agent');
+    Object.assign(s, { cwd, startedAt: step?.at || hook.at, lastActivity: hook.at, eventsOnly: true });
+    out.push(s);
+  }
+  return out;
+}
+
+/**
  * Tag the desks of sequence step worktrees (.claude/worktrees/office-<item>-<stamp>) with pod.step = { id, text, phase,
  * run }: from the board's active run steps, else from the folder name (a step kept after a failed check or a stopped run).
  */
@@ -285,14 +312,18 @@ function summarize(s, hook, now, background) {
       case 'Stop': case 'turn-over': if (age < 2 * 3600000) status = 'idle'; break;
       case 'SessionStart': if (age < 2 * 3600000 && status !== 'working') status = 'idle'; break;
       // the launcher's own start says only that the agent's command began: what the transcript shows stands
-      case 'start': if (hook.kind !== 'launcher' && age < 2 * 3600000 && status !== 'working') status = 'idle'; break;
+      // (with no transcript to go by, the agent's command is taken to be at work until its ended event)
+      case 'start':
+        if (age >= 2 * 3600000) break;
+        if (hook.kind !== 'launcher') { if (status !== 'working') status = 'idle'; } else if (s.eventsOnly) status = 'working';
+        break;
       case 'SessionEnd': case 'ended': status = 'gone'; break;
       default: break;
     }
   }
   return {
-    id: s.id,
-    title: s.title || 'Untitled session',
+    id: s.id, agent: s.agent || 'claude',
+    title: s.title || (s.eventsOnly ? `${s.agent} session` : 'Untitled session'),
     firstPrompt: s.firstPrompt, lastPrompt: s.lastPrompt, lastAssistantText: s.lastAssistantText,
     role: classifyRole(s), status, statusDetail, background,
     model: s.model, contextTokens: s.contextTokens, contextWindow: window,

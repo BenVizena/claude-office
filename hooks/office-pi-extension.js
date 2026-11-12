@@ -70,7 +70,7 @@ export default function claudeOffice(pi) {
   const note = (ctx, record) => {
     try {
       const session = sessionOf(ctx);
-      if (session) writeEvent(session, { ...record, cwd: typeof ctx.cwd === 'string' ? ctx.cwd : undefined });
+      if (session) writeEvent(session, { ...record, agent: 'pi', cwd: typeof ctx.cwd === 'string' ? ctx.cwd : undefined });
     } catch { /* an unwritable folder is never Pi's problem */ }
   };
   let fresh = true; // no run yet since the session started: its first news is the board summary

@@ -9,7 +9,10 @@
 //     eventKind?(hook)         the agent's own event names as one of EVENT_KINDS (or null)
 //     permissionModes?         the permission modes it can be started in (settings.launchPermissionMode)
 //     installEvents?()         puts its event hook in place (Claude's hook and Pi's extension are installed by scripts/install.js)
-//     readTranscript?          reads its transcripts for tokens, context and status (Claude's is server/scanner.js) }
+//     readTranscript?          its transcripts, for tokens, context and status: a source for the SessionScanner
+//                              { agent, files() -> [{ file, id }], ingest(session, line) } filling in the session
+//                              summary of server/transcript.js (Claude's own is in server/scanner.js). An agent
+//                              without one still gets a desk, from its events alone (office.js eventSessions) }
 // Built-in adapters are listed in BUILT_IN; settings.agents adds more from command templates (generic.js).
 //
 // Whatever the agent, the launcher script (launch.js) sets OFFICE_SESSION_ID and OFFICE_AGENT for it, and writes a
@@ -27,6 +30,9 @@ export const DEFAULT_AGENT = 'claude';
 const BUILT_IN = { claude: claudeAgent, pi: piAgent };
 const builtIns = () => Object.values(BUILT_IN).map((make) => make({}));
 const ID = /^[a-z][a-z0-9-]{0,30}$/;
+
+/** The built-in agents' transcript sources (see readTranscript above), for the SessionScanner. */
+export const transcriptReaders = () => builtIns().map((a) => a.readTranscript).filter(Boolean);
 
 /** Variables a launched session must not inherit: the office's own markers and every built-in agent's. */
 export const CLEAR_ENV = [...new Set([OFFICE_SESSION_ENV, OFFICE_AGENT_ENV, ...builtIns().flatMap((a) => a.clearEnv || [])])];

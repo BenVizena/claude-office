@@ -3,6 +3,7 @@
 // to ~/.pi/agent/extensions; they are written under the office's own names (start, turn-over, ended, tool), so there
 // is nothing to map here. Pi asks no per-tool permission, so it has no permission modes: the one given is ignored.
 import { killByCommandLine } from './proc.js';
+import { piTranscripts } from './pi-transcript.js';
 
 /** A value for settings.piModel: a Pi --model pattern ("ollama/qwen2.5:7b", "sonnet:high"), or '' for Pi's own default. */
 export function checkPiModel(v) {
@@ -27,5 +28,7 @@ export function piAgent(settings = {}) {
     },
     // finds the pi process by the --session-id it was started with, as for claude
     close: (session) => killByCommandLine(session, { before: 'session-id' }),
+    // its session files, for tokens, context and status (pi-transcript.js)
+    readTranscript: piTranscripts,
   };
 }

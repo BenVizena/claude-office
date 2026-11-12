@@ -6,6 +6,6 @@ import { writeEvent } from '../server/events.js';
 
 const [session, event] = process.argv.slice(2);
 try {
-  if (['start', 'ended'].includes(event)) writeEvent(session, { event, kind: 'launcher', cwd: process.cwd() });
+  if (['start', 'ended'].includes(event)) writeEvent(session, { event, kind: 'launcher', cwd: process.cwd(), agent: process.env.OFFICE_AGENT || undefined });
 } catch { /* a bad id or an unwritable folder: the office falls back on its timeouts */ }
 process.exit(0);

@@ -1,5 +1,5 @@
 // Session events, one small file per session: ~/.claude/office/events/<session>.json holds the session's LAST event
-// { event, at, tool?, message?, kind?, cwd? }. A session's hook writes it (hooks/office-hook.mjs for Claude Code) and
+// { event, at, tool?, message?, kind?, cwd?, agent? } (agent: the adapter id of the agent whose session it is, when the writer knows). A session's hook writes it (hooks/office-hook.mjs for Claude Code) and
 // the office reads the folder, so nothing has to listen on a port. `event` is start, turn-over, ended or tool, or an
 // agent's own name for one (Claude Code's hook names): agents/index.js eventKind says which. The launcher script of a
 // session the office starts writes start and ended itself, with kind 'launcher' (scripts/session-event.js). Only the last event is kept: what the office needs
@@ -19,15 +19,15 @@ const fileFor = (session) => path.join(EVENTS_DIR, `${session}.json`);
 function clean(o) {
   if (!o || typeof o.event !== 'string' || !Number.isFinite(o.at)) return null;
   const text = (v, max) => (typeof v === 'string' ? v.slice(0, max) : undefined);
-  return { event: o.event.slice(0, 60), at: o.at, tool: text(o.tool, 100), message: text(o.message, 300), kind: text(o.kind, 40), cwd: typeof o.cwd === 'string' ? nativePath(o.cwd) : undefined };
+  return { event: o.event.slice(0, 60), at: o.at, tool: text(o.tool, 100), message: text(o.message, 300), kind: text(o.kind, 40), agent: text(o.agent, 40), cwd: typeof o.cwd === 'string' ? nativePath(o.cwd) : undefined };
 }
 
 /** Records a session's event (what a hook does; also for the office's own launcher and tests). */
-export function writeEvent(session, { event, at = Date.now(), tool, message, kind, cwd }) {
+export function writeEvent(session, { event, at = Date.now(), tool, message, kind, cwd, agent }) {
   if (!SESSION.test(String(session))) throw new Error('not a session id');
   const file = fileFor(session);
   const tmp = `${file}.${process.pid}.tmp`;
-  const data = JSON.stringify({ event, at, tool, message, kind, cwd });
+  const data = JSON.stringify({ event, at, tool, message, kind, cwd, agent });
   try {
     fs.writeFileSync(tmp, data);
     fs.renameSync(tmp, file);
