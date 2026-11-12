@@ -394,7 +394,9 @@ kept in memory. What the office itself saves is plain JSON/Markdown:
 
 - `~/.claude/office/` — `settings.json`, `decor/` (room layouts, stored relative to the walls so they survive rooms
   resizing), `room-sizes.json`, `todos/` (to-do boards), `catalog/` (furniture), `status/` (agents' status lines),
-  `results/` (posted results, one file per run, plus copies of posted images)
+  `results/` (posted results, one file per run, plus copies of posted images), `office.log` (what the server
+  printed: its errors and warnings. In a Windows console window the server prints only its startup lines and logs the
+  rest here, because a console pauses any program that writes to it while text is selected in its window)
 - `~/.claude-office/staff/` — workspaces for the background agents (kept outside `~/.claude`, which Claude Code protects from edits)
 - `~/.claude-office/office-hook.mjs` — the installed hook
 

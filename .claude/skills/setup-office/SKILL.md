@@ -79,7 +79,8 @@ On Linux, if it says no terminal emulator was found, ask them to run `npm start`
 
 Then run `npm run status` and check that the server line says `OK`.
 
-If it stays `MISSING`: ask the user what the new terminal window shows. If port
+If it stays `MISSING`: read the end of `~/.claude/office/office.log` (the server's errors go there) and ask the user
+what the new terminal window shows. If port
 4777 is taken by something else, they can pick another port with the `OFFICE_PORT` environment variable; don't stop
 or kill anything yourself.
 

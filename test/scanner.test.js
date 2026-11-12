@@ -70,6 +70,24 @@ describe('SessionScanner', () => {
     assert.equal(sc.get('sess-b').lastPrompt, 'second prompt');
   });
 
+  test('a transcript that cannot be opened right now is read on a later pass instead of throwing', () => {
+    transcript('C--proj-busy', 'sess-busy', [
+      { type: 'user', timestamp: iso(2000), cwd: '/work/busy', message: { content: 'First prompt' } },
+    ]);
+    const sc = new SessionScanner(settings);
+    const open = fs.openSync;
+    fs.openSync = (file, ...rest) => {
+      if (String(file).includes('sess-busy')) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      return open(file, ...rest);
+    };
+    try {
+      assert.doesNotThrow(() => sc.scan());
+      assert.equal(sc.get('sess-busy').cwd, null, 'nothing read yet');
+    } finally { fs.openSync = open; }
+    assert.equal(sc.scan(), true, 'still counts as changed');
+    assert.equal(sc.get('sess-busy').cwd, '/work/busy');
+  });
+
   test('meta lines, command wrappers and interruptions are not counted as prompts', () => {
     transcript('C--proj-c', 'sess-c', [
       { type: 'user', timestamp: iso(), cwd: '/c', isMeta: true, message: { content: 'meta' } },

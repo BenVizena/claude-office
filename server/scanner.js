@@ -54,7 +54,9 @@ export class SessionScanner {
           if (st.size < rec.offset) { // truncated / rewritten
             rec.offset = 0; rec.partial = ''; rec.session = newSession(name.slice(0, -6), file);
           }
-          this.readNew(rec, file, st.size);
+          // a transcript that can't be opened right now (another program holds it, or it was just removed) is
+          // read on a later pass: its size isn't recorded, so it still counts as changed
+          try { this.readNew(rec, file, st.size); } catch { continue; }
           rec.size = st.size; rec.mtimeMs = st.mtimeMs;
           rec.session.fileMtime = st.mtimeMs;
           changed = true;

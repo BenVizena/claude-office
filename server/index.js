@@ -20,7 +20,17 @@ import { startOnItem, assertStartable, closeSessionWindow, LAUNCH_PERMISSION_MOD
 import { computeUsage } from './usage.js';
 import { useNonBlockingLocks, whenUnlocked } from './lock.js';
 import { listRuns, runSummary, loadRun, imagePath, removeRun, IMAGE_TYPES } from './results.js';
+import { startLog, quietConsole, consoleCanBlock, LOG_FILE } from './log.js';
 
+startLog(); // everything printed from here on is also kept in the log file
+// An error nothing caught: Node would print it straight to the console (which can block, see log.js) and exit.
+// Put it in the log first. A failed promise is logged and the office carries on; after an uncaught exception the
+// process may be in a bad state, so it stops, as Node would have.
+process.on('unhandledRejection', (e) => console.error('unhandled rejection:', e));
+process.on('uncaughtException', (e) => {
+  console.error('uncaught exception, the office is stopping:', e);
+  process.exit(1);
+});
 useNonBlockingLocks(); // the CLI may hold a board's lock: wait for it without freezing the server
 let settings = loadSettings();
 if (syncHookCopy()) console.log('Updated the installed Claude Code hook to this version.');
@@ -119,11 +129,16 @@ const runSequences = makeRunner(
 let lastFull = 0;
 let lastSeq = 0;
 setInterval(() => {
-  // not before the first office model is built: until then no room is known, so launches and requests would fail
-  if (state && Date.now() - lastSeq > 3000) { lastSeq = Date.now(); runSequences(); }
-  if (scanner.scan()) dirty = true;
-  // statuses depend on elapsed time, so refresh every few seconds regardless
-  if (dirty || Date.now() - lastFull > 5000) { dirty = false; lastFull = Date.now(); rebuild(); }
+  // one failed pass (a file that vanished mid-read, say) must not take the server down: the next pass tries again
+  try {
+    // not before the first office model is built: until then no room is known, so launches and requests would fail
+    if (state && Date.now() - lastSeq > 3000) { lastSeq = Date.now(); runSequences(); }
+    if (scanner.scan()) dirty = true;
+    // statuses depend on elapsed time, so refresh every few seconds regardless
+    if (dirty || Date.now() - lastFull > 5000) { dirty = false; lastFull = Date.now(); rebuild(); }
+  } catch (e) {
+    console.error('polling pass failed:', e);
+  }
 }, 1200);
 
 // ---- http ----
@@ -135,6 +150,11 @@ const STATIC = [
   ['/', path.join(REPO_DIR, 'public')],
 ];
 
+/** Streams a file as the response body. A read that fails midway (the file was replaced or removed) ends the response. */
+function sendFile(res, file) {
+  fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
+}
+
 function serveStatic(req, res, urlPath) {
   for (const [prefix, dir] of STATIC) {
     if (!urlPath.startsWith(prefix)) continue;
@@ -143,7 +163,7 @@ function serveStatic(req, res, urlPath) {
     if (!file.startsWith(path.resolve(dir) + path.sep)) break; // the separator keeps a sibling like public-x out
     if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) break;
     res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
-    fs.createReadStream(file).pipe(res);
+    sendFile(res, file);
     return true;
   }
   return false;
@@ -433,7 +453,7 @@ const server = http.createServer(async (req, res) => {
     const type = IMAGE_TYPES[path.extname(file).toLowerCase()];
     // an SVG could carry script: it is only ever shown through <img>, and the CSP stops it if opened directly
     res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'", 'X-Content-Type-Options': 'nosniff' });
-    fs.createReadStream(file).pipe(res);
+    sendFile(res, file);
     return;
   }
   if (req.method === 'GET' && serveStatic(req, res, url.pathname)) return;
@@ -446,6 +466,7 @@ server.on('upgrade', (req, socket, head) => {
   if (!isLocalHost(req)) { socket.destroy(); return; }
   if (origin && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) { socket.destroy(); return; }
   wss.handleUpgrade(req, socket, head, (ws) => {
+    ws.on('error', () => { /* a page that went away mid-message: its socket closes, nothing to do */ });
     if (state) ws.send(JSON.stringify({ type: 'state', state }));
   });
 });
@@ -455,8 +476,19 @@ function broadcast(msg) {
   for (const c of wss.clients) if (c.readyState === 1) c.send(data);
 }
 
+// said in the window too (the console isn't quiet yet): this is what a second copy started by hand shows
+server.on('error', (e) => {
+  console.error(e.code === 'EADDRINUSE'
+    ? `Port ${PORT} is already in use: the office may already be running at http://localhost:${PORT} (or set OFFICE_PORT to use another port).`
+    : `The office could not start: ${e.message}`);
+  process.exit(1);
+});
+
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Claude Office is open at http://localhost:${PORT}`);
+  // a Windows console pauses whoever writes to it while text is selected in its window: write nothing more to it
+  if (consoleCanBlock()) console.log(`Errors and warnings go to ${LOG_FILE}, not to this window. Close the window to stop the office.`);
+  quietConsole();
   scanner.scan();
   rebuild();
 });

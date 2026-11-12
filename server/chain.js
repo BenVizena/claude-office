@@ -382,7 +382,10 @@ export async function sweepLeftovers(slug, git) {
 export function makeRunner(listBoardIds, ctx) {
   const busy = new Set();
   return () => {
-    for (const slug of listBoardIds()) {
+    let slugs;
+    // called from timers: a boards folder that can't be read this once must not throw out of them
+    try { slugs = listBoardIds(); } catch (e) { console.error('could not list the boards:', e.message); return; }
+    for (const slug of slugs) {
       if (busy.has(slug)) continue;
       busy.add(slug);
       (async () => {

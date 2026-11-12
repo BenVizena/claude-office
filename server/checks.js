@@ -21,7 +21,7 @@ export function runCheck(cmd, cwd, { timeoutMs = CHECK_TIMEOUT_MS } = {}) {
     const timer = setTimeout(() => {
       timedOut = true;
       // the shell's children too: on Windows kill the whole tree
-      if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true });
+      if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }).on('error', () => { /* the check is reported as timed out either way */ });
       else child.kill('SIGKILL');
     }, timeoutMs);
     child.stdout.on('data', add);

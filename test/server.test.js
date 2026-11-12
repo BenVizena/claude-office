@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { SETTINGS_FILE } from '../server/config.js';
 import { readBoard } from '../server/todos.js';
+import { LOG_FILE } from '../server/log.js';
 
 const SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server', 'index.js');
 
@@ -215,6 +216,25 @@ describe('server HTTP API', () => {
       assert.equal(r.status, 400);
       assert.match(r.body.error, /no longer in the room/);
       assert.equal((await api('/api/decor/item', { room: 'lobby', action: 'remove', id })).body.ok, true);
+    });
+  });
+
+  describe('log file and startup errors', () => {
+    test('what the server prints is kept in the log file', () => {
+      assert.match(fs.readFileSync(LOG_FILE, 'utf8'), /^\d{4}-\d\d-\d\dT[\d:.]+Z Claude Office is open at http:\/\/localhost:\d+$/m);
+    });
+
+    test('a second server on the same port says so and exits, and the first keeps running', async () => {
+      const second = spawn(process.execPath, [SERVER], { env: childEnv({ OFFICE_PORT: String(port) }), cwd: TEST_HOME });
+      let out = '';
+      second.stdout.on('data', (c) => { out += c; });
+      second.stderr.on('data', (c) => { out += c; });
+      const code = await new Promise((resolve) => second.on('close', resolve));
+      assert.equal(code, 1);
+      assert.match(out, new RegExp(`Port ${port} is already in use`));
+      assert.doesNotMatch(out, /\n\s+at /, 'a plain message, not a stack trace');
+      assert.match(fs.readFileSync(LOG_FILE, 'utf8'), new RegExp(`Port ${port} is already in use`));
+      assert.equal((await request('GET', '/api/state')).status, 200);
     });
   });
 });

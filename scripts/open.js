@@ -6,6 +6,7 @@
 import http from 'node:http';
 import { PORT, REPO_DIR } from '../server/config.js';
 import { openTerminal } from '../server/launch.js';
+import { LOG_FILE } from '../server/log.js';
 
 const URL_ = `http://localhost:${PORT}`;
 // it listens at once but answers only after its first scan of every transcript, which takes a while with big ones
@@ -51,5 +52,5 @@ for (const end = Date.now() + WAIT_MS; Date.now() < end;) {
   }
 }
 console.error(`Opened a terminal window for the office, but nothing answers at ${URL_} after ${WAIT_MS / 1000}s. `
-  + 'Check that window for an error (a port already in use, for example).');
+  + `Check that window and ${LOG_FILE} for an error (a port already in use, for example).`);
 process.exit(1);
