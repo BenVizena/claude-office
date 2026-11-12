@@ -1,4 +1,6 @@
 // Install / uninstall the Claude Office hooks and the office-todo skill (and the same for Pi: its extension and skill).
+// The hook and the Pi extension report a session's events by writing a small file under ~/.claude/office/events, so
+// they work the same for the web office and the headless one, and nothing here needs a port.
 //   node scripts/install.js setup      # hooks + skill (and the Pi parts when Pi has a folder here), then status (used by the /setup-office skill)
 //   node scripts/install.js status     # check prerequisites and what's installed
 //   node scripts/install.js hooks      # add hooks to ~/.claude/settings.json (backs it up first)
@@ -10,6 +12,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { CLAUDE_DIR, REPO_DIR, HOOK_SRC, HOOK_FILE, HOOK_REPO_FILE, PI_DIR, PI_EXT_SRC, PI_EXT_FILE, writeHookRepo, PORT, loadSettings, resolveBlender } from '../server/config.js';
 import { runningOffice } from '../server/instance.js';
+import { agentFor } from '../server/agents/index.js';
 
 const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
 // The hook only imports Node's own modules up front, so it's copied out of the repo: moving or deleting the clone
@@ -66,7 +69,7 @@ function installHooks() {
   }
   writeSettings(s);
   console.log(`Hooks installed in ${SETTINGS} (backup: settings.json.office-backup).`);
-  console.log('New and resumed Claude Code sessions will report to the office; already-running ones pick it up after restart.');
+  console.log('New and resumed Claude Code sessions will report to the office (web or headless: the hook writes a small file and connects to nothing); already-running ones pick it up after restart.');
 }
 
 function installSkill(dir = SKILL_DIR) {
@@ -80,8 +83,9 @@ description: Read and update the shared Claude Office to-do boards (one per proj
 # Office to-do boards
 
 The user keeps a to-do board for every project (and one office-wide board) in Claude Office and watches it
-on the wall of the project's room. The CLI works out the project from your current directory (git worktrees
-share their main repo's board) and records which Claude Code session you are automatically.
+on the wall of the project's room (or in the terminal view, \`npm run tui\`). The CLI works out the project from your
+current directory (git worktrees share their main repo's board) and records which session you are automatically,
+whichever coding agent you are (Claude Code, Pi, or another one the office started).
 
 \`\`\`bash
 ${T} list                          # open items as a tree (subtasks indented, claims shown)
@@ -102,7 +106,7 @@ ${T} context <id> --retire <n> "why it no longer holds"   # retire a stale entry
 ${T} done <id>                     # finished and verified
 ${T} release <id>                  # giving it up unfinished
 ${T} block <id> "why it's blocked"
-${T} run <id> [--max N] [--parallel N]  # run the item and what waits on it, a fresh session per item (see Sequences)
+${T} run <id> [--max N] [--parallel N] [--agent <id>]  # run the item and what waits on it, a fresh session per item (see Sequences)
 ${T} mine                          # what you have claimed
 ${T} completed [--days 7]          # recently finished
 ${T} review [--days 14]             # tidy-up pass: open items that have probably drifted (lists only)
@@ -134,7 +138,8 @@ When a write starts a new board for your directory, the CLI says so: if that was
   done, or your claim on it is gone.
 - **Waiting on the board? Use \`wait\` in the background.** When you would otherwise sit idle until another session
   finishes something — or you were started from the board (▶) to work on an item — start \`${T} wait\` as a
-  background command (run_in_background). It uses no tokens while it waits and finishes when an item you follow is
+  background command (run_in_background in Claude Code; if your agent has no way to keep a command running while
+  you go on, skip \`wait\`). It uses no tokens while it waits and finishes when an item you follow is
   unblocked, finished by someone else, or your claim is taken over, printing what happened; start it again if it
   says you still follow items. Without it, news reaches you on the user's next message (news the watcher printed
   comes again there once, marked as a repeat: ignore it if you already acted on it). If an idle session is woken
@@ -172,9 +177,14 @@ When a write starts a new board for your directory, the CLI says so: if that was
   micro-steps and anything you'll finish within this task.
 - Never delete items the user created; mark them done or blocked instead.
 - If you stop working on something you claimed, \`release\` it so others can pick it up.
-- **Only use this CLI.** Never call the office's HTTP API (\`localhost:4777\` or \`OFFICE_PORT\`) or edit its files under
-  \`~/.claude/office/\` yourself, and never change \`OFFICE_SESSION_ID\`, \`CLAUDE_CODE_SESSION_ID\` or \`CLAUDE_OFFICE_RUN\` for it. The API is
-  the user's own controls: starting runs, approving checks and the Sequences setting are theirs to decide.
+- **Only use this CLI, and only the commands above.** Starting, stopping and approving sequences, approving checks,
+  running a check as the office would and changing the office settings are the user's own controls: \`approve\`,
+  \`stop\`, \`request start|dismiss\`, \`check <id> --now\` and \`settings <name> <value>\` are for the user's own
+  terminal, and the CLI refuses them inside a session (when one is needed, ask the user to run it). Never go around
+  that: don't edit the office's files under \`~/.claude/office/\` yourself, don't call the web office's HTTP API
+  (\`localhost:4777\` or \`OFFICE_PORT\`; a headless office has none), and never change or unset the variables that say
+  which session you are (\`OFFICE_SESSION_ID\`, \`OFFICE_AGENT\`, \`CLAUDE_CODE_SESSION_ID\`, \`PI_SESSION_ID\`,
+  \`CLAUDE_OFFICE_RUN\`).
 
 ## Sequences: a chain of items, one fresh session each
 When the user asks you to turn work into a chain and run it ("make these sequential tasks and run them"), the office
@@ -192,13 +202,16 @@ waiting.
 3. **Add checks** where a command can show a step worked (\`check <id> "npm test"\`): fast and specific. Unless the
    user lets checks run without approval (\`check\` says so), they approve checks a session sets, and a run stops at
    an unapproved one, so mention them to the user.
-4. **Run it:** \`${T} run <root id> [--max N] [--parallel N]\`. It covers the root, its subtasks and everything that waits
+4. **Run it:** \`${T} run <root id> [--max N] [--parallel N] [--agent <id>]\`. It covers the root, its subtasks and everything that waits
    on them. --max caps how many sessions it starts (default 5, at most 15); keep it to the number of items unless the
    user says otherwise. --parallel N (at most 4) runs up to N independent items at once, each in its own git worktree
    and branch made from your current worktree and merged back into it when done and verified; use it only for
    fan-outs whose steps don't touch the same files, and only when your worktree is committed and on a branch.
+   Steps are started with the office's default coding agent; pass --agent <id> (claude, pi, or one the user added in
+   the office settings) only when the user asked for another.
    Depending on the user's office setting, the office starts it right away, asks the user (it waits on the board with
-   Start / Dismiss), or refuses: say which to the user. Board news tells you as items finish. A board runs up to 15
+   Start / Dismiss; with no web page they answer in their own terminal: \`office-todo request start\` or
+   \`request dismiss\`), or refuses: say which to the user. Board news tells you as items finish. A board runs up to 15
    sequences at once, as long as no two share an open item: one that overlaps a running sequence is refused (the
    error names the item), so start it from an item outside that sequence or once it is done, and tell the user.
    A board holds one pending request, so start several sequences one \`run\` at a time: when sessions may start
@@ -208,18 +221,25 @@ waiting.
    is merged back when verified. Expect merge conflicts if two of them change the same lines.
    Sequences started by sessions also share a daily cap on the sessions they start (an office setting, across all
    boards): a run that reaches it stops, and the board says why. Each step's session starts in the permission mode
-   the user picked on the board, so a step may wait at its terminal for a permission prompt.
+   the user picked in the office settings, so a step may wait at its terminal for a permission prompt. When the
+   office runs steps as background processes (an office setting, for a machine with no desktop), nobody can answer
+   a step: what its permission mode doesn't allow is refused, and its output goes to a log file whose path
+   \`show <id>\` gives. Write items for such steps so they need no questions answered.
 - **One item in a fresh session:** \`${T} run <id> --max 1\` hands just that item to a new session (a sequence of
   one; without --max 1 it would go on to what waits on the item).
 - **If you were started by a sequence** (your prompt says "step N of up to M"), do your item only and end your turn;
   never start sequences or other items yourself (the CLI refuses anyway), and don't start \`wait\`: the office watches
   the run. Subagents for your own item are fine. In a parallel run, commit your work on your branch before \`done\`: the office won't merge uncommitted work.
+  If your prompt says you run as a background process, nobody sees your output or can answer you: don't ask and
+  wait. Decide what you reasonably can and note the decision on the item with \`context\`; if the item can't go on
+  without the user, \`block\` it with the question.
 - A run stops for the user on anything but a clean, verified done (blocked, released, failed or unapproved check,
   merge conflict, session ended). If an item you depend on should change course, \`block\` it with why instead of
   letting the run go ahead.
 
 ## Your status (speech bubble)
-In the office you sit at a desk, and a speech bubble above your head says what you're doing. Set it yourself:
+In the office (the web page and the terminal view alike) you sit at a desk, and a speech bubble above your head says
+what you're doing. Set it yourself:
 
 \`\`\`bash
 ${T} status "Tracking down the freed-node crash — 2 suspects left" [--mood 🤔]
@@ -241,8 +261,8 @@ ${T} status --clear
 
 ## Showing results (charts, tables, images, notes)
 When you produce results the user will want to look at — test runs, benchmarks, training or eval metrics,
-experiment comparisons — post them to the office. A screen appears on your desk and a "📊 View results" tab sits
-above your speech bubble; the user clicks it to see your charts. **Post partial results as they come in** (epoch 1-5
+experiment comparisons — post them to the office. In the web office a screen appears on your desk and a "📊 View
+results" tab sits above your speech bubble; the user clicks it to see your charts. **Post partial results as they come in** (epoch 1-5
 while more epochs are still running), not only at the end.
 
 \`\`\`bash
@@ -289,6 +309,26 @@ function installPi() {
   console.log('New Pi sessions will report to the office; already-running ones pick it up after /reload.');
 }
 
+/** Is an installed copy (the hook, the Pi extension) the same as this version's file? */
+function sameFile(a, b) {
+  try { return fs.readFileSync(a).equals(fs.readFileSync(b)); } catch { return false; }
+}
+
+/** The line about the coding agent the office starts on board items (settings.defaultAgent) and how steps run. */
+function agentLine(settings, { claudeOk, piIn }) {
+  const how = settings.stepRunner === 'background' ? 'sequence steps as background processes' : 'in terminal windows';
+  let agent;
+  try { agent = agentFor(null, settings); } catch (e) { return [false, `default agent: ${e.message}`]; }
+  const text = `the office starts ${agent.label} sessions on board items (${how}; office-todo settings defaultAgent / stepRunner)`;
+  if (agent.id === 'claude') return [claudeOk, claudeOk ? text : 'the default agent is Claude Code, which was not found (see above)'];
+  if (agent.id === 'pi') {
+    if (!version('pi', ['--version'])) return [false, 'the default agent is Pi, but the pi command is not on PATH (npm i -g @earendil-works/pi-coding-agent)'];
+    if (!piIn) return [false, 'the default agent is Pi, but its extension and skill are not installed: npm run install-pi'];
+    return [true, `${text}${settings.piModel ? `, model ${settings.piModel}` : ''}`];
+  }
+  return [true, `${text}: ${agent.command({ session: '{session}', prompt: '{prompt}' }).join(' ')}`];
+}
+
 function version(cmd, args) {
   try { return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], shell: process.platform === 'win32' }).trim().split('\n')[0]; } catch { return null; }
 }
@@ -308,21 +348,30 @@ async function status() {
   const claudeOk = path.isAbsolute(claude) ? fs.existsSync(claude) : !!version(claude, ['--version']);
   const blender = resolveBlender(settings);
   const piIn = fs.existsSync(PI_EXT_FILE) && fs.existsSync(path.join(PI_SKILL_DIR, 'SKILL.md'));
+  // An installed copy from an older version: the office refreshes it when it starts, setup does it now. (A hook from
+  // before events were files reports to a web server, which the headless office does not have.)
+  const hookCurrent = !fs.existsSync(HOOK_FILE) || sameFile(HOOK_FILE, HOOK_SRC);
+  const piCurrent = !fs.existsSync(PI_EXT_FILE) || sameFile(PI_EXT_FILE, PI_EXT_SRC);
+  // without Claude Code the office still runs other agents; only its own staff (designer, colleague, administrator) need it
+  const claudeNeeded = (settings.defaultAgent || 'claude') === 'claude';
   const office = runningOffice(); // the lock every office holds (web or headless): no need to knock on a port
   const lines = [
     [nodeMajor >= 22, `Node.js ${process.versions.node}${nodeMajor >= 22 ? '' : ' (need 22 or newer)'}`],
     [!!git, git || 'git not found on PATH'],
-    [claudeOk, claudeOk ? `Claude Code: ${claude}` : `Claude Code not found (claudePath = ${claude})`],
+    [claudeOk || (claudeNeeded ? false : 'optional'), claudeOk ? `Claude Code: ${claude}`
+      : `Claude Code not found (claudePath = ${claude})${claudeNeeded ? '' : ': only needed for Claude sessions and the web office\'s designer and staff'}`],
     [fs.existsSync(path.join(REPO_DIR, 'node_modules', 'ws')), 'npm dependencies installed'],
-    [hooksIn && fs.existsSync(HOOK_FILE) && hookNodeOk, hookNodeOk ? `hooks in ${SETTINGS}`
-      : `hooks run ${hookNode}, which no longer exists (Node moved or upgraded): run npm run setup again`],
+    [hooksIn && fs.existsSync(HOOK_FILE) && hookNodeOk && hookCurrent, !hookNodeOk
+      ? `hooks run ${hookNode}, which no longer exists (Node moved or upgraded): run npm run setup again`
+      : hookCurrent ? `hooks in ${SETTINGS}` : `the installed hook (${HOOK_FILE}) is from another version: run npm run setup again`],
     [fs.existsSync(path.join(SKILL_DIR, 'SKILL.md')), `office-todo skill in ${SKILL_DIR}`],
-    [piIn ? true : 'optional', piIn ? `Pi extension and office-todo skill in ${PI_DIR}`
-      : 'Pi extension not installed (only needed to run Pi sessions from the office: npm run install-pi)'],
+    [piIn ? piCurrent : 'optional', !piIn ? 'Pi extension not installed (only needed to run Pi sessions from the office: npm run install-pi)'
+      : piCurrent ? `Pi extension and office-todo skill in ${PI_DIR}` : `the installed Pi extension (${PI_EXT_FILE}) is from another version: run npm run install-pi again`],
+    agentLine(settings, { claudeOk, piIn }),
     [blender ? true : 'optional', blender ? `Blender: ${blender}` : 'Blender not installed (only needed to model new furniture)'],
     [office ? true : 'optional', office
       ? `office running ${office.mode === 'web' ? `at http://localhost:${office.port}` : 'headless (no open ports)'}, process ${office.pid}`
-      : `office not running (npm run open for the web office at http://localhost:${PORT}, or npm run headless)`],
+      : `office not running (npm run open for the web office at http://localhost:${PORT}, or npm run open-headless for the headless one: no web page, no open ports)`],
   ];
   for (const [ok, text] of lines) console.log(`${ok === true ? 'OK      ' : ok === 'optional' ? 'OPTIONAL' : 'MISSING '} ${text}`);
   return lines.every(([ok]) => ok);

@@ -2,6 +2,12 @@
 
 A light, airy, low-poly isometric office that visualizes your Claude Code work.
 
+It runs as a web page, or **headless**: the same to-do boards, statuses and sequences with no web page and no open
+port, shown as an isometric wireframe in your terminal. And the sessions it starts on board items don't have to be
+Claude Code: [Pi](https://pi.dev) is built in, and any other coding agent can be added as a command. See
+[Headless office and the terminal view](#headless-office-and-the-terminal-view) and
+[Choosing a coding agent](#choosing-a-coding-agent).
+
 ![The office: a lobby and three project rooms with agents at their desks](docs/screenshots/office.png)
 
 - **Rooms** are projects (git repos; worktrees of the same repo share a room). They grow with their worktrees and only
@@ -25,9 +31,9 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
   (what's open, what it holds) and on later prompts when something it claimed or created changes: an item it waited
   on was unblocked, someone else finished or took it over, or you added work. Nothing is added when nothing changed.
   When a session ends, its claims are marked "session ended" so another session can take them without `--force`.
-- **▶ Start a session on an item.** On a project board, ▶ opens a terminal window running `claude` in the worktree
-  you pick, with the item already claimed for it. It's an ordinary interactive session: you approve its permissions
-  as usual. Before marking its item done, a session leaves a handoff note on every item that waits on it. Tick
+- **▶ Start a session on an item.** On a project board, ▶ opens a terminal window running `claude` (or the coding
+  agent you made the default, see *Choosing a coding agent*) in the worktree you pick, with the item already claimed
+  for it. It's an ordinary interactive session: you approve its permissions as usual. Before marking its item done, a session leaves a handoff note on every item that waits on it. Tick
   *in a new worktree and branch made from it* to have the office make a fresh worktree for it first
   (`.claude/worktrees/office-<id>-…` inside the one you picked, on branch `office/<id>-…` from its HEAD), so it
   doesn't edit the same files as sessions already there. The session commits on that branch; merging it is up to you.
@@ -74,10 +80,11 @@ A light, airy, low-poly isometric office that visualizes your Claude Code work.
   Dismiss and the session's desk shows ✋) or *sessions may start them*. Sessions that a sequence started can never
   start one, and sequences started by sessions share a daily cap of 20 sessions (`sessionRunDailyCap` in
   `~/.claude/office/settings.json`). These settings decide how well-behaved sessions ask; they are not a security
-  boundary. The office's API can't tell its own page from any other program on your machine, so a session that
+  boundary. The web office's API can't tell its own page from any other program on your machine, so a session that
   runs `curl` or a script against it could start a run, approve a check or edit the board files, whatever the
-  setting says. The skill tells sessions never to call the API, and the step check that sessions are
-  sequence-started relies on environment variables they could change. Keep reviewing shell commands as usual.
+  setting says. The headless office has no API, but the same controls exist as `office-todo` commands, which
+  refuse to run inside a session only because of environment variables a session could change, and the boards and
+  settings are plain files. The skill tells sessions never to do any of that. Keep reviewing shell commands as usual.
 - **Results.** Sessions can post charts, tables, images and short notes (test runs, benchmarks, training metrics)
   with `office-todo results …`, partial results included. A small screen with a live sparkline goes up on the
   agent's desk and a "📊 View results" tab sits above its speech bubble; click either to open the results window.
@@ -196,8 +203,9 @@ session:
 
 ### Sequences: a chain of items, one fresh session each
 
-A **sequence** is the office working through a set of board items for you, each in a **new Claude Code session with
-a clean context**, started only once everything it depends on is done and verified.
+A **sequence** is the office working through a set of board items for you, each in a **new session with a clean
+context** (Claude Code by default; Pi or another agent if you choose, per sequence), started only once everything it
+depends on is done and verified.
 
 **What a sequence covers.** Starting a sequence on an item covers that item, all its subtasks, and every item that
 waits on any of them, recursively. Building a chain is building a dependency graph on the board: a straight line
@@ -207,14 +215,16 @@ waits on any of them, recursively. Building a chain is building a dependency gra
 
 1. **Pick what is ready**: in scope, `todo`, unclaimed (or stale), all dependencies done *and* fully verified and
    merged, and all subtasks done. Ties go by board order: what you arranged by hand first, then priority, then age.
-2. **Launch it.** The office opens a terminal running an interactive `claude` with a new session id, claims the item
-   for that id *before* the session starts, and gives it a short prompt. The prompt names only the item id, says
+2. **Launch it.** The office opens a terminal running an interactive `claude` (or the sequence's agent) with a new
+   session id, claims the item for that id *before* the session starts, and gives it a short prompt. (Or, with
+   `stepRunner background`, starts it as a background process with no window: see *Background steps*.) The prompt names only the item id, says
    this is step N of up to M, and tells the session to run `show <id>`, do this one item, leave handoff notes, mark
    it done and end its turn. Everything else the session needs comes from the item's background, which includes
    the handoff notes from the steps before it.
 3. **Wait for a clean finish.** A step is finished only when the item is marked `done` **and** the session's turn
-   is over (a `Stop` hook, or Claude Code's idle "waiting for your input" notification). Then nothing can still be
-   editing files when the next step starts.
+   is over (for Claude Code a `Stop` hook or its idle "waiting for your input" notification; for Pi its extension's
+   "settled" event; for an agent with no hooks, its command exiting). Then nothing can still be editing files when
+   the next step starts.
 4. **Verify.** If the item has an approved check, the office runs it in the step's worktree. If the check fails, the
    item goes back to in progress, the output is attached to the item, and the sequence stops.
 5. **Move on**, until everything in scope is done, the step cap is reached (default 5, at most 15), or something
@@ -239,7 +249,8 @@ is done and verified, the office:
 and only then counts the item as done for what waits on it. So a join item always starts on a tree that contains
 every branch it depends on, already checked together.
 
-**No Claude orchestrates any of this.** The runner is ordinary server code reading the board, the hooks and git.
+**No Claude orchestrates any of this.** The runner is ordinary code in the office (web or headless) reading the
+board, the sessions' event files and git.
 Nothing pays for tokens while a step works, while a check runs, or while a sequence waits for you.
 
 **Several at once.** A board runs up to 15 sequences, as long as no two share an open item. Otherwise one sequence
@@ -310,10 +321,192 @@ and it starts without the warm understanding of the code a long session builds u
 are substantial and fairly self-contained. Steps that are too small each pay the start-up cost and rediscover the
 same ground, which is why the skill tells sessions to size steps so each one does meaningful work.
 
+## Headless office and the terminal view
+
+The office is one core (session scanning, boards, board news, sequences) with two front ends. Only one office runs at
+a time, whichever kind: both hold the same lock file, so sequence steps are never started twice.
+
+| | Web office | Headless office |
+|---|---|---|
+| Start | `npm start` (or `npm run open`: its own window) | `npm run headless` (or `npm run open-headless`) |
+| You see it in | the browser, http://localhost:4777 | the terminal view, `npm run tui` |
+| You control it with | the page (the `office-todo` commands work too) | `office-todo` commands and the terminal view's keys |
+| Network | one port on 127.0.0.1 | **none** |
+| Designer, colleague, administrator, results window, decor | yes | no (results are still stored for the web office) |
+
+### No open ports
+
+The headless office opens **no socket and no port**, listening or outgoing. Everything goes through files under
+`~/.claude/office/`:
+
+- **Sessions → office.** The Claude Code hook and the Pi extension write one small file per session
+  (`events/<session>.json`, the session's last event). The office watches the folder. Nothing is posted anywhere,
+  so the same hook serves the web office and the headless one, and it costs nothing when no office runs.
+- **Office → sessions.** Board news is worked out by the hook itself from the board files and the session's outbox.
+- **You → office.** The `office-todo` commands write the boards and settings; the office picks changes up within a
+  few seconds.
+- **Office → you.** Each time its model changes, the office writes `state.json`. The terminal view reads that file.
+
+The guarantee is tested: `test/headless.test.js` starts the real headless office and checks that the process holds
+no network handle of any kind. The office also reports what it has open in every snapshot, and
+`office-todo office` prints it ("running headless with no open ports"). Two limits to be clear about: the
+*web* office still listens on 127.0.0.1 when you choose to run it, and the coding agents the office starts talk to
+their own model providers as they always do.
+
+### Your controls, as commands
+
+What the web page's buttons do, you type in your own terminal (run them from the project's folder, or name the board
+with `--board`). `office-todo` here is `node bin/office-todo.js` in the clone; `npm link` puts it on your PATH.
+
+```bash
+office-todo office                       # is an office running, which kind, how fresh is its model
+office-todo list                         # the board
+office-todo run <id> [--max N] [--parallel N] [--agent <id>] [--worktree <path>]   # start a sequence on an item
+office-todo run <id> --max 1             # just that one item, in a fresh session
+office-todo runs                         # sequences on this board, and any request waiting for you
+office-todo stop [<run id>]              # stop one (running steps finish first; again: stop now; once stopped: clear it)
+office-todo request start | dismiss      # answer a sequence a session asked for
+office-todo approve <id>                 # approve the check a session set on an item
+office-todo check <id> --now             # run an approved check now
+office-todo settings [<name> [<value>]]  # show the office settings, or change one
+office-todo help [<command>]
+```
+
+These are yours: the CLI refuses them inside an agent's session, where `run` only *asks* for a sequence, as the
+*Sequences* setting (`sessionRuns`) allows.
+
+### The terminal view
+
+```bash
+npm run tui
+```
+
+An isometric wireframe of the office drawn with braille dots: rooms are projects, the figures at the desks are
+sessions with their speech bubbles, and a pane on the right holds the to-do board. It scales with the terminal, from a
+schematic at 40×12 to full detail on a large one, and you can zoom and pan.
+
+It is **only a viewer**, a separate process that reads `state.json` and the board files. Closing it, or selecting
+text in it, never stalls the office or a sequence. It works with either office, and the board pane (and its keys)
+works even when no office is running; the bottom line then says so.
+
+| Key | |
+|---|---|
+| `+` `-` | zoom in, zoom out |
+| arrows (also `h` `l`) | move the view (in the board: move the selection) |
+| `n` `p` (also `]` `[`) | next room, previous room |
+| `Esc` `0` | the whole office again; `0` also resets zoom and position |
+| `d` | detail: auto, small, medium, large |
+| `c` | colour on or off |
+| `b` | show or hide the board |
+| `Tab` | move the keyboard between the office and the board |
+| `j` `k` (PgUp, PgDn, Home, End) | next, previous board row |
+| `s` | run the selected item in sequence (`+` / `-` in the prompt change the session cap); start a sequence a session asked for |
+| `x` | stop the selected sequence (again: stop now; once stopped: clear it); dismiss a request |
+| `a` `r` | approve the selected item's check; run it now |
+| `?` | help |
+| `q` (Ctrl+C) | quit |
+
+The board keys always ask `y` / `n` first. `s` starts a sequence one item at a time with the default agent;
+parallel runs and `--agent` stay with `office-todo run`. Like the commands above, they are refused when the view
+is started inside an agent's session.
+
+From 110 columns the board sits to the right of the office; in a narrower terminal `b` swaps the office for the
+board. With no room focused the pane lists every board that has something open; focus a room (`n` / `p`) to see
+that room's board, or the lobby for the office-wide one.
+
+Options (`npm run tui -- <option>`): `--once` prints one frame and exits (also what happens when the output is not a
+terminal, so it can be piped), `--size 120x40` sets that frame's size, `--no-color` (`NO_COLOR` is honoured too),
+`--no-board`, `--focus <room>`, `--demo` shows a made-up office instead of yours, `--help`.
+
+It uses the alternate screen and restores the terminal on quit, Ctrl+C, signals and crashes, and it runs inside tmux.
+
+## Choosing a coding agent
+
+Sessions you start yourself show up in the office whatever started them, as long as their agent reports to it
+(Claude Code through its hooks, Pi through its extension). This section is about the sessions the **office** starts:
+▶ on an item and every sequence step.
+
+- `defaultAgent` is the agent the office starts: `claude` (the default), `pi`, or one you added.
+  `office-todo settings defaultAgent pi`
+- One sequence can use another: `office-todo run <id> --agent pi` (also on `request start`). The agent is stored
+  with the sequence, so changing the default later doesn't change a running one.
+
+Whatever the agent, the office sets `OFFICE_SESSION_ID` and `OFFICE_AGENT` for the session it starts, so the
+`office-todo` CLI knows which session is calling, and it records the session's start and end itself. Board items,
+claims, handoff notes, checks and merges work the same for every agent.
+
+### Pi
+
+[Pi](https://pi.dev) is the `pi` command of the npm package `@earendil-works/pi-coding-agent`.
+
+```bash
+npm i -g @earendil-works/pi-coding-agent
+npm run install-pi                                  # the office's Pi extension and the office-todo skill, into ~/.pi/agent
+office-todo settings defaultAgent pi                # or: office-todo run <id> --agent pi
+office-todo settings piModel ollama/qwen2.5:7b      # optional: the --model for Pi sessions the office starts
+```
+
+`npm run install-pi` copies the extension to `~/.pi/agent/extensions/claude-office.js` and the skill to
+`~/.pi/agent/skills/office-todo/`. `npm run setup` does the same when `~/.pi/agent` exists, `npm run status`
+has a line for it, and `npm run uninstall` removes both. Running Pi sessions pick the extension up after `/reload`.
+
+The extension does for Pi what the hooks do for Claude Code: it writes the session's events (started, working, turn
+over, ended) and hands board news to the session before a run starts. The office reads Pi's own session files
+(`~/.pi/agent/sessions`) for tokens, context and status, so a Pi desk shows the same detail as a Claude one.
+
+Things to know: Pi asks no per-tool permission, so `launchPermissionMode` doesn't apply to it. Leave `piModel`
+empty to use Pi's own default model. A small local model (the tests use a 7B one through Ollama) only suits trivial
+items, and "ask a colleague" can't read a Pi session's transcript yet.
+
+### Any other agent
+
+An agent with no adapter of its own is a command template:
+
+```bash
+office-todo settings agents '{"aider":"aider --yes --message {prompt}"}'
+office-todo settings defaultAgent aider             # or --agent aider on one sequence
+```
+
+`{prompt}` becomes the office's prompt for the item (one argument, however long) and `{session}` the session id
+the office made. The value can also be `{"command": "...", "background": "...", "label": "..."}`: `background` is
+the command used when steps run as background processes, if the agent's non-interactive form differs. Ids are
+lower-case letters, digits and `-`. `agents` can only be set from your own terminal, never from the web page or a
+session, because it holds commands the office will run.
+
+Such an agent has no hooks, so the office sees only that its session started and ended: its desk shows no tokens or
+context, it gets no board news, and a step counts as finished when the item is done and the command has exited. It
+uses the board through the `office-todo` CLI like any other, so its prompt tells it what to run, but it has to be
+an agent that can follow such instructions and run shell commands.
+
+## Background steps
+
+By default every sequence step is a terminal window you can watch and answer. On a machine with no desktop (or when
+you don't want windows), run steps as background processes:
+
+```bash
+office-todo settings stepRunner background    # back again: window
+```
+
+- Each step runs the agent's non-interactive form (`claude -p`, `pi -p`, or a template agent's `background`
+  command) with its input closed. Its output goes to `~/.claude/office/steps/<session>.log`; the path is shown on
+  the item (`office-todo show <id>`) and in the sequence's log (`office-todo runs`). Logs are kept for two weeks.
+- **Nobody can answer a permission prompt.** For Claude steps, what the permission mode doesn't allow is refused, so
+  `launchPermissionMode` decides how much a step can do (`acceptEdits`, `auto` or `bypassPermissions`; these
+  sessions are not sandboxed, so choose with care). Pi asks no permissions.
+- The step is told it runs unattended: instead of asking and waiting it notes its decisions on the item, or blocks
+  the item with its question, which stops the sequence for you.
+- `office-todo stop` (twice, to stop now) ends the step's process. A step whose process dies is noticed, its claim
+  freed and the sequence stopped. Background steps outlive an office restart and are found again.
+- A plain ▶ start is always a terminal window. With no desktop, `office-todo run <id> --max 1` gives one item a
+  background session.
+
 ## Requirements
 
 - **Node.js 22+** and **git** on your PATH
-- **Claude Code**, signed in. The office reads its transcripts, and the in-office agents run `claude -p`.
+- **Claude Code**, signed in. The office reads its transcripts, and the in-office agents run `claude -p`. (A
+  headless office whose default agent is Pi or another agent runs without it; `npm run status` then lists it as
+  optional.)
+- *Optional:* **Pi** (`npm i -g @earendil-works/pi-coding-agent`), to have the office start Pi sessions.
 - *Optional:* **Blender**, only needed when the designer models new furniture. You can install it any time; the
   office picks it up without a restart.
 
@@ -339,13 +532,22 @@ Or by hand:
 ```bash
 npm install
 npm run setup        # installs the hooks and the office-todo skill, then checks everything
-npm start            # http://localhost:4777
+npm start            # the web office: http://localhost:4777
 ```
 
-Next time, just run `npm start` in this folder. `npm run open` does the same in a new terminal window (and does
-nothing if the office is already running); Claude Code uses it, through the `/start-office` skill, so the office
-doesn't stop with the session that started it. `npm run status` checks the install; `npm run uninstall` removes
-the hooks and the skill.
+or, for the headless office (no web page, no open ports):
+
+```bash
+npm run headless     # the office, in this terminal
+npm run tui          # the terminal view, in another
+```
+
+Next time, just run `npm start` (or `npm run headless`) in this folder. `npm run open` and
+`npm run open-headless` do the same in a new terminal window (and do nothing if an office of either kind is already
+running); Claude Code uses them, through the `/start-office` skill, so the office doesn't stop with the session
+that started it. On a server with no desktop, run `npm run headless` in tmux or screen, or as a service.
+`npm run status` checks the install, names the agent the office starts and says which office is running;
+`npm run uninstall` removes the hooks, the skill and the Pi parts.
 
 Setup installs two things outside this folder:
 
@@ -353,9 +555,13 @@ Setup installs two things outside this folder:
 - **The `office-todo` skill** in `~/.claude/skills/office-todo`, which lets your sessions read and update the to-do
   boards, set their status bubble and post results.
 
+If you use Pi (`~/.pi/agent` exists), it also installs the Pi extension and the same skill there; see
+[Pi](#pi).
+
 The hooks go in your **global** `~/.claude/settings.json` (a copy is saved as `settings.json.office-backup`).
-The hook only forwards a few fields (session id, event name, tool name, cwd, a short message) to the local server and
-always exits immediately, so it never slows down or blocks Claude Code — even when the office isn't running.
+The hook only writes a few fields (event name, time, tool name, cwd, a short message) to one small file per session
+in `~/.claude/office/events/` and always exits immediately. It connects to nothing, so it never slows down or
+blocks Claude Code — even when the office isn't running.
 The hook script is copied to `~/.claude-office/` (and refreshed when you pull a new version), so it keeps working if
 you move or delete the clone.
 
@@ -383,9 +589,10 @@ it through `make-item.mjs`. That script is ordinary Python, so the permission ru
 
 ## Controls
 
-WASD / arrows to walk (Shift to hurry), click the floor to walk there (paths go through doors), E or click to interact,
+In the web office: WASD / arrows to walk (Shift to hurry), click the floor to walk there (paths go through doors), E or click to interact,
 wheel to zoom, 0–9 to jump between rooms, M for sound, Esc to close panels. Right-click furniture to move/resize it, or an
-agent to pin its status bubble.
+agent to pin its status bubble. The terminal view's keys are listed under
+[The terminal view](#the-terminal-view).
 
 ## Data
 
@@ -396,9 +603,15 @@ kept in memory. What the office itself saves is plain JSON/Markdown:
   resizing), `room-sizes.json`, `todos/` (to-do boards), `catalog/` (furniture), `status/` (agents' status lines),
   `results/` (posted results, one file per run, plus copies of posted images), `office.log` (what the server
   printed: its errors and warnings. In a Windows console window the server prints only its startup lines and logs the
-  rest here, because a console pauses any program that writes to it while text is selected in its window)
+  rest here, because a console pauses any program that writes to it while text is selected in its window),
+  `events/` (each session's last event, written by the hook or the Pi extension), `state.json` (the office model,
+  rewritten as it changes, for the terminal view), `office.lock` (which office is running), `steps/` (logs and
+  records of background steps, kept two weeks)
 - `~/.claude-office/staff/` — workspaces for the background agents (kept outside `~/.claude`, which Claude Code protects from edits)
-- `~/.claude-office/office-hook.mjs` — the installed hook
+- `~/.claude-office/office-hook.mjs` — the installed hook (and `office-repo.json`, which tells it where this
+  clone is)
+- `~/.pi/agent/extensions/claude-office.js` and `~/.pi/agent/skills/office-todo/` — only if you installed the Pi
+  parts
 
 Results that `watch` a file aren't copied: the office stores the file's path and reads it from where it is whenever
 it changes, so the chart stops updating if the file is moved or deleted. Agents can clear their results with
@@ -407,13 +620,18 @@ it changes, so the chart stops updating if the file is moved or deleted. Agents 
 Delete `~/.claude/office/` and `~/.claude-office/staff/` to reset the office. To remove it entirely, run
 `npm run uninstall` first, then delete `~/.claude/office/` and `~/.claude-office/`.
 
-Nothing leaves your machine except the `claude -p` calls above. The server binds to 127.0.0.1 only, rejects requests
+Nothing leaves your machine except the `claude -p` calls above and whatever the coding agents the office starts
+send to their own model providers. The web server binds to 127.0.0.1 only, rejects requests
 whose `Host` isn't `localhost`/`127.0.0.1` (DNS-rebinding protection) and refuses cross-site requests. It has no
-login: any program running as you can call it, Claude sessions with shell access included.
-Set `OFFICE_PORT` to use a port other than 4777.
+login: any program running as you can call it, sessions with shell access included.
+Set `OFFICE_PORT` to use a port other than 4777. The headless office opens no port at all (see
+[No open ports](#no-open-ports)).
 
 Settings (`~/.claude/office/settings.json`): `roomMaxAgeDays`, `sessionMaxAgeDays`, `showBackgroundSessions`,
-`hiddenProjects`, `pinnedProjects`, `chatModel`, `decorModel`, `blenderPath`, `claudePath`.
+`hiddenProjects`, `pinnedProjects`, `chatModel`, `decorModel`, `blenderPath`, `claudePath`, and the ones
+`office-todo settings` lists and changes (the web page's board settings are the same ones): `sessionRuns`,
+`sessionRunDailyCap`, `autoApproveChecks`, `closeFinishedSteps`, `stepRunner`, `launchPermissionMode`,
+`mergeStyle`, `defaultAgent`, `agents`, `piModel`.
 `claudePath` is detected on first run; edit it if detection picked the wrong one (it may also point at Claude Code's
 `cli.js`, which is then run with node). Leave `blenderPath` empty to find Blender automatically: it's looked for again
 while the office runs, so installing Blender later works without a restart. Until then the designer sticks to the
@@ -430,7 +648,9 @@ npm test
 
 Runs the suite in `test/` with Node's built-in test runner (no extra dependencies).
 It covers the to-do boards, board news, results, transcript scanning and status, pricing, the office layout math,
-the `office-todo` CLI end to end, and the hook. Each test file points the home directory at a temporary folder
+the `office-todo` CLI end to end, the hook, the headless office (as a real process: no open ports, one office at a
+time), the agent adapters, background steps, the installer, and the terminal view (frames compared with snapshots in
+`test/snapshots/`). Each test file points the home directory at a temporary folder
 (`test/helpers/home.js`) and deletes it afterwards, so tests never touch your real `~/.claude` data, and they don't
 need the office to be running.
 

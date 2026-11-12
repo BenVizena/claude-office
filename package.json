@@ -14,6 +14,7 @@
     "headless": "node server/headless.js",
     "tui": "node tui/app.js",
     "open": "node scripts/open.js",
+    "open-headless": "node scripts/open.js --headless",
     "setup": "node scripts/install.js setup",
     "status": "node scripts/install.js status",
     "install-hooks": "node scripts/install.js hooks",

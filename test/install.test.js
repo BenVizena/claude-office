@@ -7,7 +7,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { CLAUDE_DIR, HOOK_FILE, HOOK_SRC, HOOK_REPO_FILE, REPO_DIR, PI_DIR, PI_EXT_FILE, PI_EXT_SRC, syncPiExtension } from '../server/config.js';
+import { CLAUDE_DIR, HOOK_FILE, HOOK_SRC, HOOK_REPO_FILE, REPO_DIR, PI_DIR, PI_EXT_FILE, PI_EXT_SRC, syncPiExtension, loadSettings, saveSettings } from '../server/config.js';
 
 const INSTALL = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'install.js');
 const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
@@ -62,6 +62,9 @@ describe('install.js', () => {
     assert.match(text, /^---\nname: office-todo\ndescription: /);
     assert.ok(text.includes('bin/office-todo.js" claim <id>'));
     assert.ok(!text.includes('${T}'), 'no template placeholders left');
+    // for any agent, and for an office with no web page
+    assert.ok(!/which Claude Code session you are/.test(text), 'the wording does not assume Claude Code');
+    for (const word of ['--agent <id>', 'OFFICE_SESSION_ID', 'PI_SESSION_ID', 'request start', 'background process', 'npm run tui']) assert.ok(text.includes(word), word);
   });
 
   test('pi: the extension and the skill go into Pi\'s folder, and status says so', () => {
@@ -88,11 +91,33 @@ describe('install.js', () => {
   test('status reports one line per check', () => {
     const r = run('status');
     const lines = r.stdout.trim().split(/\r?\n/);
-    assert.equal(lines.length, 9);
+    assert.equal(lines.length, 10);
     assert.ok(lines.every((l) => /^(OK      |MISSING |OPTIONAL) /.test(l)), r.stdout);
     assert.ok(lines.some((l) => l.startsWith('OK') && l.includes('hooks in')));
     assert.ok(lines.some((l) => l.startsWith('OK') && l.includes('office-todo skill')));
-    assert.ok(lines.some((l) => l.startsWith('OPTIONAL') && l.includes(`localhost:${port}`)), 'no server running');
+    assert.ok(lines.some((l) => l.startsWith('OPTIONAL') && l.includes(`localhost:${port}`) && l.includes('npm run open-headless')), 'no office running');
+    assert.ok(lines.some((l) => /the office starts Claude sessions on board items \(in terminal windows/.test(l) || l.includes('the default agent is Claude Code, which was not found')), r.stdout);
+  });
+
+  test('status names the default agent and how steps run; Claude Code is optional when another agent is the default', () => {
+    const before = loadSettings();
+    saveSettings({ ...before, agents: { echo: 'echo {prompt}' }, defaultAgent: 'echo', stepRunner: 'background', claudePath: path.join(TEST_HOME, 'no-claude-here') });
+    try {
+      const out = run('status').stdout;
+      assert.match(out, /OK {7}the office starts echo sessions on board items \(sequence steps as background processes; .*\): echo \{prompt\}/);
+      assert.match(out, /OPTIONAL Claude Code not found .*only needed for Claude sessions/);
+      saveSettings({ ...before, defaultAgent: 'gone' });
+      assert.match(run('status').stdout, /MISSING  default agent: there is no agent "gone"/);
+    } finally { saveSettings(before); }
+  });
+
+  test('status flags an installed hook from another version', () => {
+    fs.writeFileSync(HOOK_FILE, '// an older hook, which posted to the web server');
+    const r = run('status');
+    assert.equal(r.status, 1);
+    assert.match(r.stdout, /MISSING  the installed hook \(.*\) is from another version: run npm run setup again/);
+    assert.equal(run('hooks').status, 0);
+    assert.match(run('status').stdout, /OK {7}hooks in /);
   });
 
   test('status flags hooks whose node has gone', () => {
