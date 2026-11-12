@@ -6,7 +6,7 @@
 //     close(session)           ends a session the office launched, so its terminal window closes
 //     eventKind?(hook)         the agent's own event names as one of EVENT_KINDS (or null)
 //     permissionModes?         the permission modes it can be started in (settings.launchPermissionMode)
-//     installEvents?()         puts its event hook in place (Claude's is installed by scripts/install.js)
+//     installEvents?()         puts its event hook in place (Claude's hook and Pi's extension are installed by scripts/install.js)
 //     readTranscript?          reads its transcripts for tokens, context and status (Claude's is server/scanner.js) }
 // Built-in adapters are listed in BUILT_IN; settings.agents adds more from command templates (generic.js).
 //
@@ -15,13 +15,14 @@
 // ends its turn. Events are files (events.js); their `event` is one of EVENT_KINDS or an agent's own name for it.
 import { claudeAgent } from './claude.js';
 import { genericAgent } from './generic.js';
+import { piAgent } from './pi.js';
 
 export const EVENT_KINDS = ['start', 'turn-over', 'ended', 'tool'];
 export const OFFICE_SESSION_ENV = 'OFFICE_SESSION_ID';
 export const OFFICE_AGENT_ENV = 'OFFICE_AGENT';
 export const DEFAULT_AGENT = 'claude';
 
-const BUILT_IN = { claude: claudeAgent };
+const BUILT_IN = { claude: claudeAgent, pi: piAgent };
 const builtIns = () => Object.values(BUILT_IN).map((make) => make({}));
 const ID = /^[a-z][a-z0-9-]{0,30}$/;
 

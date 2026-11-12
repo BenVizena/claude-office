@@ -7,11 +7,12 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { CLAUDE_DIR, HOOK_FILE, HOOK_SRC, HOOK_REPO_FILE, REPO_DIR } from '../server/config.js';
+import { CLAUDE_DIR, HOOK_FILE, HOOK_SRC, HOOK_REPO_FILE, REPO_DIR, PI_DIR, PI_EXT_FILE, PI_EXT_SRC, syncPiExtension } from '../server/config.js';
 
 const INSTALL = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'install.js');
 const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
 const SKILL = path.join(CLAUDE_DIR, 'skills', 'office-todo', 'SKILL.md');
+const PI_SKILL = path.join(PI_DIR, 'skills', 'office-todo', 'SKILL.md');
 
 // a port nothing listens on, so `status` never finds the user's real office
 const port = await new Promise((resolve) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
@@ -63,10 +64,31 @@ describe('install.js', () => {
     assert.ok(!text.includes('${T}'), 'no template placeholders left');
   });
 
+  test('pi: the extension and the skill go into Pi\'s folder, and status says so', () => {
+    assert.equal(PI_DIR, path.join(TEST_HOME, '.pi', 'agent'));
+    assert.match(run('status').stdout, /OPTIONAL Pi extension not installed/);
+    assert.equal(run('setup').stdout.includes('Pi extension installed'), false, 'setup leaves Pi alone where it is not used');
+    const r = run('pi');
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(fs.readFileSync(PI_EXT_FILE).equals(fs.readFileSync(PI_EXT_SRC)));
+    assert.equal(path.dirname(PI_EXT_FILE), path.join(PI_DIR, 'extensions'), 'where Pi looks for extensions');
+    assert.equal(fs.readFileSync(PI_SKILL, 'utf8'), fs.readFileSync(SKILL, 'utf8'), 'the same skill as Claude Code gets');
+    assert.deepEqual(JSON.parse(fs.readFileSync(HOOK_REPO_FILE, 'utf8')), { repo: REPO_DIR }, 'the copy is told where the repo is');
+    assert.match(run('status').stdout, /OK {7}Pi extension and office-todo skill in /);
+    // now that Pi has a folder, setup keeps its parts current too; so does the office when it starts
+    fs.writeFileSync(PI_EXT_FILE, '// an older version');
+    assert.match(run('setup').stdout, /Pi extension installed/);
+    assert.ok(fs.readFileSync(PI_EXT_FILE).equals(fs.readFileSync(PI_EXT_SRC)));
+    fs.writeFileSync(PI_EXT_FILE, '// an older version');
+    assert.equal(syncPiExtension(), true);
+    assert.ok(fs.readFileSync(PI_EXT_FILE).equals(fs.readFileSync(PI_EXT_SRC)));
+    assert.equal(syncPiExtension(), false, 'nothing to do when it is current');
+  });
+
   test('status reports one line per check', () => {
     const r = run('status');
     const lines = r.stdout.trim().split(/\r?\n/);
-    assert.equal(lines.length, 8);
+    assert.equal(lines.length, 9);
     assert.ok(lines.every((l) => /^(OK      |MISSING |OPTIONAL) /.test(l)), r.stdout);
     assert.ok(lines.some((l) => l.startsWith('OK') && l.includes('hooks in')));
     assert.ok(lines.some((l) => l.startsWith('OK') && l.includes('office-todo skill')));
@@ -89,6 +111,9 @@ describe('install.js', () => {
     assert.equal(fs.existsSync(SKILL), false);
     assert.equal(fs.existsSync(HOOK_FILE), false);
     assert.equal(fs.existsSync(HOOK_REPO_FILE), false);
+    assert.equal(fs.existsSync(PI_EXT_FILE), false);
+    assert.equal(fs.existsSync(PI_SKILL), false);
+    assert.equal(syncPiExtension(), false, 'an extension that is not installed is not put back');
   });
 
   test('an unreadable settings.json is left alone', () => {

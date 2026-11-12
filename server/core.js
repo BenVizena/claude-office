@@ -2,7 +2,7 @@
 // office model up to date, runs sequences, and carries out what the user asks (the actions below). A front end
 // (the web server in index.js) shows the model and calls the actions. Nothing here opens a socket or a port.
 import fs from 'node:fs';
-import { normPath, loadSettings, saveSettings, resolveBlender, syncHookCopy, SETTINGS_FILE } from './config.js';
+import { normPath, loadSettings, saveSettings, resolveBlender, syncHookCopy, syncPiExtension, SETTINGS_FILE } from './config.js';
 import { EventReader, pruneEvents, EVENTS_DIR } from './events.js';
 import { SessionScanner } from './scanner.js';
 import { buildOffice } from './office.js';
@@ -60,6 +60,7 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
   function readSettings() { settings = loadSettings(); settingsStamp = stampOf(); }
   readSettings();
   if (syncHookCopy()) console.log('Updated the installed Claude Code hook to this version.');
+  if (syncPiExtension()) console.log('Updated the installed Pi extension to this version.');
   const getSettings = () => settings;
   const scanner = new SessionScanner(getSettings);
   const catalog = new Catalog();

@@ -17,6 +17,7 @@
     "status": "node scripts/install.js status",
     "install-hooks": "node scripts/install.js hooks",
     "install-skill": "node scripts/install.js skill",
+    "install-pi": "node scripts/install.js pi",
     "uninstall": "node scripts/install.js uninstall"
   },
   "bin": {

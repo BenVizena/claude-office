@@ -22,6 +22,11 @@ export const HOOK_FILE = path.join(HOME, '.claude-office', 'office-hook.mjs');
 // next to the copy: where the repo is, so the hook can load the office's board news code from it
 export const HOOK_REPO_FILE = path.join(HOME, '.claude-office', 'office-repo.json');
 
+// the Pi extension (hooks/office-pi-extension.js) and the office-todo skill go into Pi's own folder
+export const PI_DIR = process.env.PI_CODING_AGENT_DIR || path.join(HOME, '.pi', 'agent');
+export const PI_EXT_SRC = path.join(REPO_DIR, 'hooks', 'office-pi-extension.js');
+export const PI_EXT_FILE = path.join(PI_DIR, 'extensions', 'claude-office.js');
+
 /** Tells the installed hook where this clone is (a moved clone is picked up the next time the office starts). */
 export function writeHookRepo() {
   const data = JSON.stringify({ repo: REPO_DIR });
@@ -30,17 +35,19 @@ export function writeHookRepo() {
   fs.writeFileSync(HOOK_REPO_FILE, data);
 }
 
-/** Refresh the installed hook copy after a `git pull` changed it (only if hooks are installed). */
-export function syncHookCopy() {
+/** Refresh an installed copy (the Claude Code hook, the Pi extension) after a `git pull` changed it (only if it is installed). */
+function syncCopy(src, file) {
   try {
-    if (!fs.existsSync(HOOK_FILE)) return false;
+    if (!fs.existsSync(file)) return false;
     writeHookRepo();
-    const src = fs.readFileSync(HOOK_SRC);
-    if (src.equals(fs.readFileSync(HOOK_FILE))) return false;
-    fs.writeFileSync(HOOK_FILE, src);
+    const data = fs.readFileSync(src);
+    if (data.equals(fs.readFileSync(file))) return false;
+    fs.writeFileSync(file, data);
     return true;
   } catch { return false; }
 }
+export const syncHookCopy = () => syncCopy(HOOK_SRC, HOOK_FILE);
+export const syncPiExtension = () => syncCopy(PI_EXT_SRC, PI_EXT_FILE);
 
 for (const d of [OFFICE_DIR, STAFF_DIR, DECOR_DIR, TODO_DIR, CATALOG_DIR,
   path.join(CATALOG_DIR, 'items'), path.join(CATALOG_DIR, 'pending')]) {
@@ -73,12 +80,14 @@ const DEFAULT_SETTINGS = {
   // close the terminal window of a sequence step once it is done, checked and merged (its turn is over). Steps that
   // fail or stop keep theirs open, so the user can talk to the session.
   closeFinishedSteps: true,
-  // the coding agent the office starts on board items (▶ and sequence steps; a sequence can name another): 'claude',
+  // the coding agent the office starts on board items (▶ and sequence steps; a sequence can name another): 'claude', 'pi',
   // or an id from `agents`. See server/agents/index.js.
   defaultAgent: 'claude',
   // more agents, each from a command template: { id: "command with {prompt} [and {session}]" | { command, label } }
   // (server/agents/generic.js). Only the user sets it, from their terminal (office-todo settings agents '<json>').
   agents: {},
+  // the --model for Pi sessions the office starts (a Pi model pattern, e.g. 'ollama/qwen2.5:7b'): '' = Pi's own default
+  piModel: '',
 };
 
 /** First existing file among candidates, else null. */

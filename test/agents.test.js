@@ -1,4 +1,4 @@
-// Agent adapters (server/agents): the Claude adapter, agents from command templates, the launcher script's own events,
+// Agent adapters (server/agents): the Claude and Pi adapters, agents from command templates, the launcher script's own events,
 // and how the CLI tells which session it runs in.
 import { TEST_HOME, childEnv } from './helpers/home.js';
 import test, { describe } from 'node:test';
@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { agentFor, listAgents, checkAgents, eventKind, sessionFromEnv, EVENT_KINDS, CLEAR_ENV } from '../server/agents/index.js';
 import { genericAgent, splitCommand } from '../server/agents/generic.js';
+import { checkPiModel } from '../server/agents/pi.js';
 import { writeLauncher, promptFor, INHERITED_SESSION_VARS } from '../server/launch.js';
 import { readEvent } from '../server/events.js';
 import { applySettings, parseSettingValue } from '../server/officesettings.js';
@@ -43,6 +44,37 @@ describe('the Claude adapter', () => {
   });
 });
 
+describe('the Pi adapter', () => {
+  test('its command is pi with the session id and prompt, and the model when one is set', () => {
+    const a = agentFor('pi', {});
+    assert.deepEqual([a.id, a.label, a.sessionEnv], ['pi', 'Pi', ['PI_SESSION_ID']]);
+    assert.deepEqual(a.command({ session: 's1', prompt: 'do it' }), ['pi', '--session-id', 's1', 'do it']);
+    // Pi asks no per-tool permission: the mode picked for Claude sessions is simply not passed
+    assert.deepEqual(a.command({ session: 's1', prompt: 'p', permissionMode: 'auto' }), ['pi', '--session-id', 's1', 'p']);
+    assert.equal(a.permissionModes, undefined);
+    assert.deepEqual(agentFor('pi', { piModel: 'ollama/qwen2.5:7b' }).command({ session: 's', prompt: 'p' }), ['pi', '--model', 'ollama/qwen2.5:7b', '--session-id', 's', 'p']);
+    assert.throws(() => agentFor('pi', { piModel: '--evil flag' }).command({ session: 's', prompt: 'p' }), /piModel is a Pi model pattern/);
+    assert.equal(agentFor(null, { defaultAgent: 'pi' }).id, 'pi');
+    assert.deepEqual(listAgents({}), [{ id: 'claude', label: 'Claude' }, { id: 'pi', label: 'Pi' }]);
+  });
+
+  test('the piModel setting takes a model pattern or nothing', () => {
+    for (const ok of ['', 'sonnet:high', 'ollama/qwen2.5:7b', 'anthropic/claude-*']) assert.equal(checkPiModel(ok), ok);
+    for (const bad of ['-x', 'a b', 'a"b', 'a;b', 7, null]) assert.throws(() => checkPiModel(bad), /piModel/);
+    const s = { defaultAgent: 'claude', agents: {} };
+    applySettings(s, { piModel: 'ollama/qwen2.5:7b', defaultAgent: 'pi' });
+    assert.deepEqual([s.piModel, s.defaultAgent], ['ollama/qwen2.5:7b', 'pi']);
+    assert.throws(() => applySettings(s, { piModel: '--session-id x' }), /piModel/);
+    assert.equal(loadSettings().piModel, '', 'Pi\'s own default model unless one is set');
+  });
+
+  test('a Pi session is known by PI_SESSION_ID, and a launched session inherits none of Pi\'s markers', () => {
+    assert.deepEqual(sessionFromEnv({ PI_SESSION_ID: 'p1' }), { session: 'p1', agent: 'pi' });
+    assert.deepEqual(sessionFromEnv({ OFFICE_SESSION_ID: 'o1', OFFICE_AGENT: 'pi', PI_SESSION_ID: 'p1' }), { session: 'o1', agent: 'pi' });
+    for (const k of ['PI_SESSION_ID', 'PI_SESSION_FILE', 'PI_CODING_AGENT']) assert.ok(CLEAR_ENV.includes(k), k);
+  });
+});
+
 describe('agents from command templates', () => {
   test('a template is split into arguments and filled in', () => {
     assert.deepEqual(splitCommand('aider --yes  --message {prompt}'), ['aider', '--yes', '--message', '{prompt}']);
@@ -61,11 +93,12 @@ describe('agents from command templates', () => {
 
   test('settings.agents adds them; the default agent must be one there is', () => {
     const settings = { agents: { aider: 'aider --message {prompt}', broken: 'nothing to fill in' } };
-    assert.deepEqual(listAgents(settings).map((a) => a.id), ['claude', 'aider'], 'a template that can\'t be used is not offered');
+    assert.deepEqual(listAgents(settings).map((a) => a.id), ['claude', 'pi', 'aider'], 'a template that can\'t be used is not offered');
     assert.equal(agentFor('aider', settings).id, 'aider');
     assert.equal(agentFor(null, { ...settings, defaultAgent: 'aider' }).id, 'aider');
-    assert.throws(() => agentFor('pi', settings), /there is no agent "pi" \(there are: claude, aider/);
+    assert.throws(() => agentFor('cody', settings), /there is no agent "cody" \(there are: claude, pi, aider/);
     assert.throws(() => checkAgents({ claude: 'x {prompt}' }), /built-in agent/);
+    assert.throws(() => checkAgents({ pi: 'x {prompt}' }), /built-in agent/);
     assert.throws(() => checkAgents({ 'Bad Id': 'x {prompt}' }), /not an agent id/);
     assert.throws(() => checkAgents({ ok: 'x' }), /needs \{prompt\}/);
     assert.throws(() => checkAgents('aider'), /JSON object/);
@@ -112,7 +145,7 @@ describe('which session a command runs in', () => {
     assert.match(cli(['settings', 'agents', '{"aider":"aider --go"}']).stderr, /needs \{prompt\}/);
     ok(['settings', 'agents', '{"aider":"aider --message {prompt}","other":{"command":"other {prompt}","label":"Other"}}']);
     const a = JSON.parse(ok(['add', 'Agent seq', '--json']));
-    assert.match(cli(['run', a.id, '--agent', 'nope']).stderr, /there is no agent "nope" \(there are: claude, aider, other/);
+    assert.match(cli(['run', a.id, '--agent', 'nope']).stderr, /there is no agent "nope" \(there are: claude, pi, aider, other/);
     assert.match(ok(['run', a.id, '--agent', 'aider', '--max', '1']), /up to 1 session \(aider\)/);
     const slug = JSON.parse(ok(['runs', '--json'])).runs[0];
     assert.equal(slug.agent, 'aider');

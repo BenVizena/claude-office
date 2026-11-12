@@ -2,6 +2,7 @@
 // place. The file itself is read and written by config.js (loadSettings / saveSettings).
 import { LAUNCH_PERMISSION_MODES } from './agents/claude.js';
 import { listAgents, checkAgents } from './agents/index.js';
+import { checkPiModel } from './agents/pi.js';
 import { MERGE_STYLES } from './gitwork.js';
 
 const oneOf = (list) => (v, k) => { if (!list.includes(v)) throw new Error(`${k} is one of: ${list.map((m) => m || '(none)').join(', ')}`); return v; };
@@ -20,9 +21,10 @@ export const USER_SETTINGS = {
   launchPermissionMode: { check: oneOf(LAUNCH_PERMISSION_MODES), about: `permission mode for sessions the office starts: ${LAUNCH_PERMISSION_MODES.map((m) => m || '"" (your own default)').join(', ')}` },
   mergeStyle: { check: oneOf(MERGE_STYLES), about: `how a parallel step's branch lands in the base: ${MERGE_STYLES.join(', ')}` },
   defaultAgent: { check: (v, k, s) => oneOf(listAgents(s).map((a) => a.id))(v, k),
-    about: 'the coding agent the office starts on items: claude, or one from agents (a sequence can name another: run --agent)' },
+    about: 'the coding agent the office starts on items: claude, pi, or one from agents (a sequence can name another: run --agent)' },
   agents: { type: 'json', cliOnly: true, check: checkAgents,
     about: 'more agents from command templates, e.g. {"aider":"aider --message {prompt}"} ({prompt}: the office\'s prompt, {session}: the session id)' },
+  piModel: { check: checkPiModel, about: 'model for Pi sessions the office starts, e.g. ollama/qwen2.5:7b ("" = Pi\'s own default)' },
   showBackgroundSessions: { type: 'boolean', check: any, about: 'show claude -p / SDK sessions from other apps' },
   roomMaxAgeDays: { type: 'number', check: any, about: 'projects quiet for longer than this get no room' },
   sessionMaxAgeDays: { type: 'number', check: any, about: 'sessions older than this are not listed' },

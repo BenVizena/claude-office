@@ -1,13 +1,14 @@
-// Install / uninstall the Claude Office hooks and the office-todo skill.
-//   node scripts/install.js setup      # hooks + skill, then status (used by the /setup-office skill)
+// Install / uninstall the Claude Office hooks and the office-todo skill (and the same for Pi: its extension and skill).
+//   node scripts/install.js setup      # hooks + skill (and the Pi parts when Pi has a folder here), then status (used by the /setup-office skill)
 //   node scripts/install.js status     # check prerequisites and what's installed
 //   node scripts/install.js hooks      # add hooks to ~/.claude/settings.json (backs it up first)
 //   node scripts/install.js skill      # create ~/.claude/skills/office-todo/SKILL.md
-//   node scripts/install.js uninstall  # remove both
+//   node scripts/install.js pi         # copy the Pi extension to ~/.pi/agent/extensions and the skill to ~/.pi/agent/skills
+//   node scripts/install.js uninstall  # remove all of it
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { CLAUDE_DIR, REPO_DIR, HOOK_SRC, HOOK_FILE, HOOK_REPO_FILE, writeHookRepo, PORT, loadSettings, resolveBlender } from '../server/config.js';
+import { CLAUDE_DIR, REPO_DIR, HOOK_SRC, HOOK_FILE, HOOK_REPO_FILE, PI_DIR, PI_EXT_SRC, PI_EXT_FILE, writeHookRepo, PORT, loadSettings, resolveBlender } from '../server/config.js';
 import { runningOffice } from '../server/instance.js';
 
 const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
@@ -25,6 +26,8 @@ const EVENTS = {
   Notification: null, PermissionRequest: null, PreCompact: null, SubagentStop: null,
 };
 const SKILL_DIR = path.join(CLAUDE_DIR, 'skills', 'office-todo');
+// Pi (the coding agent): its extension is one copied file, like the hook, and it reads the same skill format
+const PI_SKILL_DIR = path.join(PI_DIR, 'skills', 'office-todo');
 const TODO_CLI = path.join(REPO_DIR, 'bin', 'office-todo.js').replace(/\\/g, '/');
 
 function readSettings() {
@@ -66,10 +69,10 @@ function installHooks() {
   console.log('New and resumed Claude Code sessions will report to the office; already-running ones pick it up after restart.');
 }
 
-function installSkill() {
-  fs.mkdirSync(SKILL_DIR, { recursive: true });
+function installSkill(dir = SKILL_DIR) {
+  fs.mkdirSync(dir, { recursive: true });
   const T = `node "${TODO_CLI}"`;
-  fs.writeFileSync(path.join(SKILL_DIR, 'SKILL.md'), `---
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), `---
 name: office-todo
 description: Read and update the shared Claude Office to-do boards (one per project plus an office-wide board) — claim items you work on, break them into subtasks, attach background, mark them done — set your status speech bubble in the office (update it when your phase of work changes; ask the user a question with --needs-you), and post results for the user to view (charts of test, benchmark, training or eval metrics — partial results too — tables, images, notes). Use when the user mentions the todo board / office todos, when the user gives you several tasks at once (a list of fixes, review findings, a multi-step plan) — put each on the board before you start — when you start or finish a task that is on the board, as soon as you notice follow-up work worth tracking (a bug, a gap, something left for later), when you run tests, benchmarks, training or experiments whose results the user will want to see, when asked to turn work into a chain of tasks and run it (one fresh session per task, in sequence or in parallel), or when asked what's left to do.
 ---
@@ -273,7 +276,17 @@ ${T} results list | rm "<chart>" | clear | help
     what it means. Update it as partial results change the picture.
 - Keep routine output (full logs, every test name) out; this is for results worth looking at.
 `);
-  console.log(`Skill installed at ${SKILL_DIR}`);
+  console.log(`Skill installed at ${dir}`);
+}
+
+/** Pi's side: the extension that reports its sessions and hands them board news, and the office-todo skill. */
+function installPi() {
+  fs.mkdirSync(path.dirname(PI_EXT_FILE), { recursive: true });
+  fs.copyFileSync(PI_EXT_SRC, PI_EXT_FILE);
+  writeHookRepo(); // the copy finds the repo (for board news) through the same file as the Claude Code hook
+  console.log(`Pi extension installed at ${PI_EXT_FILE}`);
+  installSkill(PI_SKILL_DIR);
+  console.log('New Pi sessions will report to the office; already-running ones pick it up after /reload.');
 }
 
 function version(cmd, args) {
@@ -294,6 +307,7 @@ async function status() {
   const claude = settings.claudePath;
   const claudeOk = path.isAbsolute(claude) ? fs.existsSync(claude) : !!version(claude, ['--version']);
   const blender = resolveBlender(settings);
+  const piIn = fs.existsSync(PI_EXT_FILE) && fs.existsSync(path.join(PI_SKILL_DIR, 'SKILL.md'));
   const office = runningOffice(); // the lock every office holds (web or headless): no need to knock on a port
   const lines = [
     [nodeMajor >= 22, `Node.js ${process.versions.node}${nodeMajor >= 22 ? '' : ' (need 22 or newer)'}`],
@@ -303,6 +317,8 @@ async function status() {
     [hooksIn && fs.existsSync(HOOK_FILE) && hookNodeOk, hookNodeOk ? `hooks in ${SETTINGS}`
       : `hooks run ${hookNode}, which no longer exists (Node moved or upgraded): run npm run setup again`],
     [fs.existsSync(path.join(SKILL_DIR, 'SKILL.md')), `office-todo skill in ${SKILL_DIR}`],
+    [piIn ? true : 'optional', piIn ? `Pi extension and office-todo skill in ${PI_DIR}`
+      : 'Pi extension not installed (only needed to run Pi sessions from the office: npm run install-pi)'],
     [blender ? true : 'optional', blender ? `Blender: ${blender}` : 'Blender not installed (only needed to model new furniture)'],
     [office ? true : 'optional', office
       ? `office running ${office.mode === 'web' ? `at http://localhost:${office.port}` : 'headless (no open ports)'}, process ${office.pid}`
@@ -315,10 +331,12 @@ async function status() {
 const cmd = process.argv[2];
 if (cmd === 'hooks') installHooks();
 else if (cmd === 'skill') installSkill();
+else if (cmd === 'pi') installPi();
 else if (cmd === 'status') process.exitCode = (await status()) ? 0 : 1;
 else if (cmd === 'setup') {
   installHooks();
   installSkill();
+  if (fs.existsSync(PI_DIR)) installPi(); // Pi is used on this computer
   console.log('');
   process.exitCode = (await status()) ? 0 : 1;
 } else if (cmd === 'uninstall') {
@@ -326,8 +344,10 @@ else if (cmd === 'setup') {
   fs.rmSync(SKILL_DIR, { recursive: true, force: true });
   fs.rmSync(HOOK_FILE, { force: true });
   fs.rmSync(HOOK_REPO_FILE, { force: true });
-  console.log('Removed Claude Office hooks and the office-todo skill.');
+  fs.rmSync(PI_EXT_FILE, { force: true });
+  fs.rmSync(PI_SKILL_DIR, { recursive: true, force: true });
+  console.log('Removed Claude Office hooks, the Pi extension and the office-todo skill.');
 } else {
-  console.log('usage: node scripts/install.js setup|status|hooks|skill|uninstall');
+  console.log('usage: node scripts/install.js setup|status|hooks|skill|pi|uninstall');
   process.exit(2);
 }
