@@ -37,7 +37,7 @@ function repoRoot(dir) {
 }
 
 /** The worktree a sequence runs in: must belong to the board's project. Returns its top folder. */
-function projectWorktree(slug, dir) {
+export function projectWorktree(slug, dir) {
   if (slug === GLOBAL_BOARD) throw new Error('sequences run on project boards');
   if (!fs.existsSync(dir)) throw new Error(`${dir} does not exist`);
   const { root, top } = repoRoot(dir);
