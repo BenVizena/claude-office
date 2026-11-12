@@ -70,7 +70,9 @@ describe('the Pi adapter', () => {
 
   test('a Pi session is known by PI_SESSION_ID, and a launched session inherits none of Pi\'s markers', () => {
     assert.deepEqual(sessionFromEnv({ PI_SESSION_ID: 'p1' }), { session: 'p1', agent: 'pi' });
-    assert.deepEqual(sessionFromEnv({ OFFICE_SESSION_ID: 'o1', OFFICE_AGENT: 'pi', PI_SESSION_ID: 'p1' }), { session: 'o1', agent: 'pi' });
+    // a Pi session the office started that has moved on to a new session of its own: Pi's live variable says which
+    assert.deepEqual(sessionFromEnv({ OFFICE_SESSION_ID: 'o1', OFFICE_AGENT: 'pi', PI_SESSION_ID: 'p1' }), { session: 'p1', agent: 'pi' });
+    assert.deepEqual(sessionFromEnv({ OFFICE_SESSION_ID: 'o1', OFFICE_AGENT: 'pi', PI_SESSION_ID: 'o1' }), { session: 'o1', agent: 'pi' });
     for (const k of ['PI_SESSION_ID', 'PI_SESSION_FILE', 'PI_CODING_AGENT']) assert.ok(CLEAR_ENV.includes(k), k);
   });
 });
@@ -120,6 +122,10 @@ describe('which session a command runs in', () => {
     assert.deepEqual(sessionFromEnv({ CLAUDE_CODE_SESSION_ID: 'c1' }), { session: 'c1', agent: 'claude' });
     assert.deepEqual(sessionFromEnv({ OFFICE_SESSION_ID: 'o1', OFFICE_AGENT: 'aider', CLAUDE_CODE_SESSION_ID: 'c1' }), { session: 'o1', agent: 'aider' });
     assert.deepEqual(sessionFromEnv({ OFFICE_SESSION_ID: 'o1' }), { session: 'o1', agent: 'agent' });
+    // a Claude session the office started, after it began a new conversation in the same window: the live id wins,
+    // so the board is not written as the session that ended
+    assert.deepEqual(sessionFromEnv({ OFFICE_SESSION_ID: 'o1', OFFICE_AGENT: 'claude', CLAUDE_CODE_SESSION_ID: 'c2' }), { session: 'c2', agent: 'claude' });
+    assert.deepEqual(sessionFromEnv({ OFFICE_SESSION_ID: 'o1', OFFICE_AGENT: 'claude' }), { session: 'o1', agent: 'claude' });
     for (const k of ['OFFICE_SESSION_ID', 'OFFICE_AGENT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDECODE']) assert.ok(CLEAR_ENV.includes(k), `${k} is not inherited by a launched session`);
     assert.ok(INHERITED_SESSION_VARS.includes('CLAUDE_OFFICE_RUN'));
   });
@@ -255,5 +261,24 @@ describe('the launcher script', () => {
         assert.equal(readEvent(session).event, 'ended', 'the launcher went on after the shim');
       }
     } finally { process.env.PATH = before; }
+  });
+});
+
+describe('closing a session the office launched', () => {
+  test('its ended event is written when closing took the launcher with it', async () => {
+    const { closeLaunched } = await import('../server/agents/index.js');
+    const { readEvent, writeEvent } = await import('../server/events.js');
+    // an agent from a template: its launcher wrote "start", and close() kills the launcher before it can write "ended"
+    writeEvent('close-a', { event: 'start', kind: 'launcher', agent: 'aider', cwd: TEST_HOME });
+    assert.equal(await closeLaunched({ id: 'aider', close: async () => 2 }, 'close-a'), 2);
+    assert.deepEqual([readEvent('close-a').event, readEvent('close-a').kind, readEvent('close-a').agent], ['ended', 'office', 'aider']);
+    // nothing was found to close (the window is already gone, or still open): what its events say stands
+    writeEvent('close-b', { event: 'start', kind: 'launcher', agent: 'aider', cwd: TEST_HOME });
+    assert.equal(await closeLaunched({ id: 'aider', close: async () => 0 }, 'close-b'), 0);
+    assert.equal(readEvent('close-b').event, 'start');
+    // an agent whose own hook already said it ended is left as it is
+    writeEvent('close-c', { event: 'SessionEnd', at: 5 });
+    await closeLaunched({ id: 'claude', close: async () => 1 }, 'close-c');
+    assert.deepEqual([readEvent('close-c').event, readEvent('close-c').at], ['SessionEnd', 5]);
   });
 });

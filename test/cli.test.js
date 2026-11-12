@@ -385,3 +385,32 @@ describe('the user\'s controls', () => {
     assert.deepEqual(json(['office'], here(null)), { running: false });
   });
 });
+
+describe('who counts as the user', () => {
+  // no agent session in the environment, and no keyboard on the input either: an agent the office knows no variable
+  // for (one the user started themselves), or a script
+  const unknown = (args, cwd = TEST_HOME) => {
+    const r = spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: 'utf8', env: childEnv({ OFFICE_TODO_USER: undefined }) });
+    return { code: r.status, out: r.stdout, err: r.stderr };
+  };
+
+  test('a caller with no session and no keyboard gets none of the user\'s controls', () => {
+    const a = json(b('add', 'Not the user\'s check'));
+    const set = unknown(b('check', a.id, 'node', '-e', 'process.exit(0)'));
+    assert.equal(set.code, 0, set.err);
+    assert.match(set.out, /once the user approves it/);
+    const check = readBoard(BOARD).items.find((x) => x.id === a.id).check;
+    assert.deepEqual([check.approved, check.by], [false, 'agent'], 'its check is not approved for it');
+    for (const args of [['approve', a.id], ['check', a.id, '--now'], ['stop'], ['request', 'dismiss'], ['settings', 'autoApproveChecks', 'on'], ['settings', 'launchPermissionMode', 'bypassPermissions']]) {
+      const r = unknown(b(...args));
+      assert.equal(r.code, 1, args.join(' '));
+      assert.match(r.err, /is the user's to decide, and this doesn't look like their terminal/, args.join(' '));
+    }
+    assert.equal(readBoard(BOARD).items.find((x) => x.id === a.id).check.approved, false);
+    assert.match(unknown(b('run', a.id)).err, /can't start a sequence: only a/);
+    assert.equal(readBoard(BOARD).runs, undefined, 'and it starts no sequence');
+    // reading stays open to anyone
+    assert.equal(unknown(b('runs')).code, 0);
+    assert.equal(unknown(b('settings')).code, 0);
+  });
+});

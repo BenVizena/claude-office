@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { OFFICE_DIR } from './config.js';
+import { withFileLock } from './lock.js';
 
 export const LOCK_FILE = path.join(OFFICE_DIR, 'office.lock');
 const BEAT_MS = 5000;
@@ -28,23 +29,48 @@ export function runningOffice(now = Date.now()) {
 export class OfficeRunning extends Error {}
 
 /**
+ * Creates the lock file for `mine` if there is none: true when we made it, false when one is there. The file appears
+ * whole (written aside, then linked into place), so nobody ever reads a lock that is still empty.
+ */
+function createLock(mine) {
+  const data = JSON.stringify(mine);
+  const tmp = `${LOCK_FILE}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, data);
+    fs.linkSync(tmp, LOCK_FILE);
+    return true;
+  } catch (e) {
+    if (e.code === 'EEXIST') return false;
+    // a file system with no hard links: create it directly (a reader may then catch it empty for an instant)
+    try { fs.writeFileSync(LOCK_FILE, data, { flag: 'wx' }); return true; } catch (e2) { if (e2.code === 'EEXIST') return false; throw e2; }
+  } finally {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* nothing to remove */ }
+  }
+}
+
+/**
  * Takes the lock for this process or throws OfficeRunning. info: { mode: 'web' | 'headless', port? }.
  * Returns release(). The lock is also released when the process exits.
  */
 export function takeInstanceLock(info, { onLost = () => {} } = {}) {
   const mine = { pid: process.pid, startedAt: Date.now(), ...info };
-  for (let attempt = 0; ; attempt++) {
-    try {
-      fs.writeFileSync(LOCK_FILE, JSON.stringify(mine), { flag: 'wx' });
-      break;
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
+  if (!createLock(mine)) {
+    let got = false;
+    if (!runningOffice()) {
+      // The lock was left by an office that is gone. Only one starter at a time may clear it: looking and then
+      // deleting, unguarded, lets two starters each delete the other's new lock and both run.
+      try {
+        got = withFileLock(`${LOCK_FILE}.takeover`, () => {
+          if (runningOffice()) return false; // another starter took it over while we waited
+          try { fs.unlinkSync(LOCK_FILE); } catch { /* gone already */ }
+          return createLock(mine);
+        }, 'another office is starting');
+      } catch { got = false; } // could not get a turn: another office is starting right now
+    }
+    if (!got) {
       const other = runningOffice();
-      if (other || attempt >= 2) {
-        const who = other ? `${other.mode === 'web' ? `the web office${other.port ? ` at http://localhost:${other.port}` : ''}` : 'the headless office'}, process ${other.pid}` : 'another office starting up';
-        throw new OfficeRunning(`The office is already running (${who}). Only one runs at a time, so sequence steps are not started twice.`);
-      }
-      try { fs.unlinkSync(LOCK_FILE); } catch { /* another starter removed it: try again */ }
+      const who = other ? `${other.mode === 'web' ? `the web office${other.port ? ` at http://localhost:${other.port}` : ''}` : 'the headless office'}, process ${other.pid}` : 'another office starting up';
+      throw new OfficeRunning(`The office is already running (${who}). Only one runs at a time, so sequence steps are not started twice.`);
     }
   }
   const ours = () => { try { return JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8')).pid === process.pid; } catch { return false; } };

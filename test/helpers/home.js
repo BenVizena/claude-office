@@ -18,6 +18,8 @@ delete process.env.OFFICE_PORT;
 // git in the temp home has no identity: merges and commits in test repos need one
 Object.assign(process.env, { GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@example.com' });
 delete process.env.OFFICE_TODO_BY;
+// the tests type the user's commands with no keyboard on the input: say it is the user (server/usercli.js)
+process.env.OFFICE_TODO_USER = '1';
 if (path.resolve(os.homedir()) !== path.resolve(TEST_HOME) || path.resolve(TEST_HOME) === path.resolve(realHome)) {
   throw new Error(`could not isolate the home directory for tests (still ${os.homedir()})`);
 }

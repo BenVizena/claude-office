@@ -16,15 +16,15 @@ import { noteLaunch, launchesToday, sessionRunPolicy } from './runpolicy.js';
 import { setStatus } from './status.js';
 import { markEnded as markNewsEnded, scanAll } from './news.js';
 import { startOnItem, assertStartable } from './launch.js';
-import { agentFor, listAgents, eventKind, DEFAULT_AGENT } from './agents/index.js';
+import { agentFor, listAgents, eventKind, closeLaunched, DEFAULT_AGENT } from './agents/index.js';
 import { applySettings } from './officesettings.js';
 import { computeUsage } from './usage.js';
 import { useNonBlockingLocks, whenUnlocked } from './lock.js';
 import { listRuns, runSummary, loadRun, imagePath, removeRun } from './results.js';
 import { startLog } from './log.js';
 import { takeInstanceLock, OfficeRunning } from './instance.js';
-import { writeSnapshot } from './snapshot.js';
-import { reapSteps, stopBackground, pruneSteps } from './steps.js';
+import { writeSnapshot, cleanSnapshotTemps } from './snapshot.js';
+import { reapSteps, stopBackground, pruneSteps, loadSteps } from './steps.js';
 
 /**
  * Sets the office up (log file, crash handlers, settings, scanner) and returns it. Nothing is watched until start().
@@ -157,7 +157,7 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
       git: gitwork,
       notify,
       // a background step has no window to keep for the user: whatever is left of it is ended
-      closeSession: async (session, agent) => ((await stopBackground(session)) || !settings.closeFinishedSteps ? null : agentFor(agent, settings).close(session)),
+      closeSession: async (session, agent) => ((await stopBackground(session)) || !settings.closeFinishedSteps ? null : closeLaunched(agentFor(agent, settings), session)),
       onRequest: (slug) => handleRequest(slug),
       changed: () => markDirty(),
     },
@@ -440,6 +440,8 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
     start() {
       if (timer) return;
       pruneEvents();
+      cleanSnapshotTemps();
+      loadSteps(); // background steps a previous office started
       pruneSteps();
       loadEvents();
       timer = setInterval(poll, 1200);

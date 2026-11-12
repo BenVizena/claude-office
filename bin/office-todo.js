@@ -10,7 +10,7 @@ import { requestRun, runsOf } from '../server/chain.js';
 import { reviewBoard, gitResolver, suggestions, STALE_DAYS } from '../server/review.js';
 import { helpText, commandHelp, findCommand } from '../server/clihelp.js';
 import { sessionRunPolicy } from '../server/runpolicy.js';
-import { userOnly, startSequence, describeRuns, stopSequence, answerRequest, approveItemCheck, runItemCheck, settingsCommand, officeStatus, agentFlag } from '../server/usercli.js';
+import { userOnly, atUserTerminal, startSequence, describeRuns, stopSequence, answerRequest, approveItemCheck, runItemCheck, settingsCommand, officeStatus, agentFlag } from '../server/usercli.js';
 import { sessionFromEnv } from '../server/agents/index.js';
 import { setStatus, clearStatus, readStatus } from '../server/status.js';
 import {
@@ -488,8 +488,9 @@ ${d.text}`);
         break;
       }
       // the user's own check is approved as they type it; one a session sets waits for `approve`
-      const r = setCheck(slug, id, { cmd: cmdText, by: session ? by : 'you', session, approved: !session });
-      console.log(r.check && !session
+      const mine = atUserTerminal(session); // not merely "no session": an agent the office knows no variable for has none either
+      const r = setCheck(slug, id, { cmd: cmdText, by: mine ? 'you' : by, session, approved: mine });
+      console.log(r.check && mine
         ? `check for "${r.text}": ${r.check.cmd} (approved: it is your own)\nThe office runs it before starting what depends on this. Run it now with: office-todo check ${r.id} --now`
         : r.check
         ? `check for "${r.text}": ${r.check.cmd}\nRun it yourself before \`done\`. ${checksAuto() ? 'The office runs it too, before starting what depends on this (the user lets checks run without approval).' : 'The office only runs it (before starting what depends on this) once the user approves it (in the office, or office-todo approve).'}`
@@ -498,8 +499,9 @@ ${d.text}`);
     }
     case 'run': {
       need();
-      if (!session && !process.env.CLAUDE_OFFICE_RUN) {
-        // typed by the user: it is theirs to start, so it starts (a session's run, below, only asks for one)
+      if (atUserTerminal(session)) {
+        // typed by the user: it is theirs to start, so it starts (a session's run, below, only asks for one, and
+        // anything else without a session is refused there)
         const r = startSequence(slug, id, flags);
         if (flags.json) print(r.run); else console.log(r.text);
         break;

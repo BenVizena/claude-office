@@ -16,9 +16,25 @@ import { readSnapshot } from './snapshot.js';
 import { USER_SETTINGS, applySettings, parseSettingValue } from './officesettings.js';
 import { agentFor } from './agents/index.js';
 
-/** Throws when called from inside an agent's session: `what` is the user's to do. */
-export function userOnly(session, what, env = process.env) {
+// Set to 1 by the user (never by an agent) where they run these commands with no keyboard on the input: their own
+// scripts, a scheduled job.
+export const USER_TERMINAL_ENV = 'OFFICE_TODO_USER';
+
+/**
+ * Is this the user in their own terminal? Not when an agent's session is in the environment, and not on the absence
+ * of one alone: an agent the office knows no variable for (one the user started themselves, a scrubbed environment)
+ * has none either. So it also takes a keyboard on the input, which a command an agent or a script runs does not have.
+ */
+export function atUserTerminal(session, { env = process.env, stdin = process.stdin } = {}) {
+  if (session || env[RUN_ENV]) return false;
+  return !!stdin?.isTTY || env[USER_TERMINAL_ENV] === '1';
+}
+
+/** Throws unless the user is the one asking (see atUserTerminal): `what` is theirs to do. */
+export function userOnly(session, what, opts = {}) {
+  const env = opts.env || process.env;
   if (session || env[RUN_ENV]) throw new Error(`${what} is the user's to decide, not a session's: ask them (they run this command in their own terminal, or use the office)`);
+  if (!atUserTerminal(session, opts)) throw new Error(`${what} is the user's to decide, and this doesn't look like their terminal (nothing is typing on its input, as when an agent or a script runs it): run it in your own terminal`);
 }
 
 function findItem(board, id) {

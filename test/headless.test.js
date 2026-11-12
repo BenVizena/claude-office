@@ -56,7 +56,10 @@ describe('headless office', () => {
     const first = readSnapshot().at;
     addItem('office', { name: 'Whole office' }, { text: 'Seen by the headless office' });
     await until(() => readSnapshot()?.at > first && readSnapshot().state.todoBoards.some((b) => b.items.some((i) => i.text === 'Seen by the headless office')), 'the snapshot did not pick up a board change', 12000);
-    assert.equal(fs.readdirSync(path.dirname(STATE_FILE)).filter((n) => n.startsWith('state.json.') && n.endsWith('.tmp')).length, 0, 'no temp files left');
+    // (one may be there for an instant, between being written and being moved into place)
+    const temps = () => fs.readdirSync(path.dirname(STATE_FILE)).filter((n) => n.startsWith('state.json.') && n.endsWith('.tmp'));
+    assert.ok(temps().length <= 1, 'temp files do not pile up');
+    await until(() => temps().length === 0, 'a temp file was left behind', 5000);
   });
 
   test('a setting changed in the file (office-todo settings) is picked up', async () => {
@@ -86,10 +89,52 @@ events: ${fs.readdirSync(path.join(TEST_HOME, '.claude', 'office', 'events')).jo
     assert.equal(runningOffice()?.pid, child.pid, 'the running office kept its lock');
   });
 
-  test('a lock left by a dead office is taken over', async () => {
+  test('when several offices start at once over a dead office\'s lock, exactly one gets it', async () => {
     child.kill();
     await until(() => child.exitCode !== null || child.signalCode !== null, 'the headless office did not stop');
     child = null;
+    const helper = path.join(path.dirname(fileURLToPath(import.meta.url)), 'helpers', 'take-lock.js');
+    for (let round = 0; round < 3; round++) {
+      // a killed process can't clean up: put back what it would have left behind
+      fs.writeFileSync(LOCK_FILE, JSON.stringify({ pid: 2 ** 22 + 12345, mode: 'headless', startedAt: 1 }));
+      const starters = Array.from({ length: 6 }, () => new Promise((resolve) => {
+        const c = spawn(process.execPath, [helper, '2500'], { env: childEnv(), cwd: TEST_HOME });
+        let out = '';
+        c.stdout.on('data', (d) => { out += d; });
+        c.on('close', () => resolve(out.trim()));
+      }));
+      const said = (await Promise.all(starters)).sort();
+      assert.deepEqual(said, ['got', 'refused', 'refused', 'refused', 'refused', 'refused'], `round ${round + 1}`);
+      assert.equal(fs.existsSync(LOCK_FILE), false, 'the one that got it released it on exit');
+    }
+  });
+
+  test('a snapshot write that fails leaves no temp file, and old ones are cleared when an office starts', async () => {
+    const dir = path.dirname(STATE_FILE);
+    const temps = () => fs.readdirSync(dir).filter((n) => n.startsWith('state.json.') && n.endsWith('.tmp'));
+    const snapshot = await import('../server/snapshot.js');
+    // a model that can't be written (it refers to itself): the write fails after nothing, or part, reached the disk
+    const loop = {}; loop.self = loop;
+    const error = console.error;
+    console.error = () => {};
+    try { snapshot.writeSnapshot(loop, 'headless'); } finally { console.error = error; }
+    assert.deepEqual(temps(), []);
+    snapshot.writeSnapshot({ rooms: [] }, 'headless');
+    assert.deepEqual([snapshot.readSnapshot().state, temps()], [{ rooms: [] }, []]);
+    assert.doesNotMatch(fs.readFileSync(STATE_FILE, 'utf8'), /\n/, 'compact: nobody reads it by eye');
+    // left by an office that was killed mid-write (and one with the name older versions used)
+    fs.writeFileSync(path.join(dir, 'state.json.4242.tmp'), '{');
+    fs.writeFileSync(path.join(dir, 'state.json.4242.1700000000000.tmp'), '{');
+    assert.equal(snapshot.cleanSnapshotTemps(), 2);
+    assert.deepEqual(temps(), []);
+  });
+
+  test('a lock left by a dead office is taken over', async () => {
+    if (child) {
+      child.kill();
+      await until(() => child.exitCode !== null || child.signalCode !== null, 'the headless office did not stop');
+      child = null;
+    }
     // a killed process can't clean up: put back what it would have left behind
     fs.writeFileSync(LOCK_FILE, JSON.stringify({ pid: 2 ** 22 + 12345, mode: 'headless', startedAt: 1 }));
     assert.equal(runningOffice(), null, 'a lock whose process is gone does not count');

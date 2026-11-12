@@ -13,7 +13,8 @@ import { applySettings } from '../server/officesettings.js';
 import { loadSettings } from '../server/config.js';
 import { readBoard, addItem, updateItem } from '../server/todos.js';
 import { startRun, tick, runsOf } from '../server/chain.js';
-import { readStep, isBackgroundStep, reapSteps, stopBackground, stepLogFile, STEPS_DIR } from '../server/steps.js';
+import crypto from 'node:crypto';
+import { readStep, isBackgroundStep, reapSteps, stopBackground, stepLogFile, STEPS_DIR, startBackground, loadSteps, verifySteps, isStepProcess } from '../server/steps.js';
 
 const until = async (what, ok, ms = 20000) => {
   for (const end = Date.now() + ms; Date.now() < end;) {
@@ -159,5 +160,60 @@ describe('a step run as a background process', () => {
     await until('the step to end', () => readEvent(step.session)?.event === 'ended');
     updateItem(slug, a.id, { status: 'done', by: 'fake' });
     assert.equal(await tick(slug, ctx), 'finished', 'its ended event is the end of its turn');
+  });
+});
+
+describe('a background step\'s process', () => {
+  // a launcher that prints a line and waits a little, named after its session as launch.js names them
+  const launcher = (dir, session, seconds = 0) => {
+    fs.mkdirSync(dir, { recursive: true });
+    const win = process.platform === 'win32';
+    const file = path.join(dir, `${session}.${win ? 'cmd' : 'command'}`);
+    const wait = `"${process.execPath}" -e "setTimeout(()=>{},${seconds * 1000})"`;
+    fs.writeFileSync(file, win ? `@echo off\r\necho launcher ran\r\n${wait}\r\n` : `#!/bin/sh\necho launcher ran\n${wait}\n`, { mode: 0o755 });
+    return file;
+  };
+
+  test('starts from a folder with a space in its name', async () => {
+    const session = crypto.randomUUID();
+    const file = launcher(path.join(TEST_HOME, 'John Smith', 'launch files'), session);
+    startBackground({ file, cwd: TEST_HOME, session, agent: 'test' });
+    await until('the launcher to run', () => /launcher ran/.test(fs.readFileSync(stepLogFile(session), 'utf8')));
+  });
+
+  test('a process number that now belongs to another program is not taken for the step, and never killed', async () => {
+    const session = crypto.randomUUID();
+    // what a step leaves when the machine restarts under it: a record that never ended, whose number is now
+    // someone else's (here: this test's own process)
+    fs.mkdirSync(STEPS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(STEPS_DIR, `${session}.json`), JSON.stringify({ session, pid: process.pid, log: stepLogFile(session), agent: 'test', cwd: TEST_HOME, at: Date.now() - 3600000 }));
+    writeEvent(session, { event: 'tool', agent: 'test' });
+    loadSteps(); // a restarted office
+    assert.equal(await isStepProcess(readStep(session)), false);
+    assert.ok(!reapSteps().includes(session), 'the number is alive, so the quick look alone does not settle it');
+    await until('the step to be found gone', () => !!readStep(session).ended);
+    assert.equal(readEvent(session).event, 'ended', 'its claim is freed and its sequence hears of it');
+    assert.match(readEvent(session).message, /now belongs to something else/);
+
+    const other = crypto.randomUUID();
+    fs.writeFileSync(path.join(STEPS_DIR, `${other}.json`), JSON.stringify({ session: other, pid: process.pid, log: stepLogFile(other), agent: 'test', cwd: TEST_HOME, at: Date.now() }));
+    loadSteps();
+    assert.equal(await stopBackground(other), true);
+    assert.ok(alive(process.pid), 'this process is still here');
+    assert.ok(readStep(other).ended);
+  });
+
+  test('a step still running after an office restart is recognised and can be ended', async () => {
+    const session = crypto.randomUUID();
+    const { pid } = startBackground({ file: launcher(path.join(TEST_HOME, 'launch files'), session, 60), cwd: TEST_HOME, session, agent: 'test' });
+    await until('the launcher to run', () => /launcher ran/.test(fs.readFileSync(stepLogFile(session), 'utf8')));
+    loadSteps(); // a restarted office reads the record back
+    assert.equal(await isStepProcess(readStep(session)), true);
+    assert.deepEqual(await verifySteps(), []);
+    assert.equal(readStep(session).ended, undefined);
+    assert.equal(await stopBackground(session), true);
+    await until('the process to end', () => !alive(pid));
+    reapSteps();
+    assert.ok(readStep(session).ended);
   });
 });

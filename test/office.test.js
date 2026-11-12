@@ -127,3 +127,24 @@ describe('buildOffice', { skip: !hasGit && 'git is not installed' }, () => {
     assert.deepEqual(room.pods[0].sessions[0].claims, [{ board: slug, id: it.id, text: 'Fix checkout', status: 'doing' }]);
   });
 });
+
+describe('a session waiting at a permission prompt', () => {
+  test('needs you for a while, not for as long as its event file lasts', async () => {
+    const { summarize, PERMISSION_WAIT_MS } = await import('../server/office.js');
+    const { newSession } = await import('../server/transcript.js');
+    const now = Date.now();
+    const at = (ago) => {
+      const s = newSession('perm-sess', null);
+      Object.assign(s, { cwd: TEST_HOME, lastEvent: 'tool_use', lastTool: 'Bash', lastActivity: now - ago - 1000 });
+      return s;
+    };
+    const hour = 3600000;
+    for (const hook of [(ago) => ({ event: 'PermissionRequest', at: now - ago, tool: 'Bash' }), (ago) => ({ event: 'Notification', at: now - ago, message: 'Claude needs your permission to use Bash' })]) {
+      assert.equal(summarize(at(hour), hook(hour), now, false).status, 'needs_you');
+      // its window was closed at the prompt, so nothing ever said it ended: the office reads the event again at every start
+      const stale = summarize(at(PERMISSION_WAIT_MS + hour), hook(PERMISSION_WAIT_MS + hour), now, false);
+      assert.notEqual(stale.status, 'needs_you');
+      assert.equal(stale.statusDetail ?? null, null);
+    }
+  });
+});

@@ -21,6 +21,7 @@
 import { claudeAgent } from './claude.js';
 import { genericAgent } from './generic.js';
 import { piAgent } from './pi.js';
+import { readEvent, writeEvent } from '../events.js';
 
 export const EVENT_KINDS = ['start', 'turn-over', 'ended', 'tool'];
 export const OFFICE_SESSION_ENV = 'OFFICE_SESSION_ID';
@@ -67,6 +68,20 @@ export function checkAgents(v) {
   return v;
 }
 
+/**
+ * Ends a session the office launched in a window (adapter.close) and makes sure its ended event is there. Closing
+ * kills the agent, and for an agent from a template the launcher script with it, which would have written that
+ * event: without it the session's last event stays "start" and its desk shows it at work long after it is gone.
+ * Resolves to how many processes were ended.
+ */
+export async function closeLaunched(adapter, session) {
+  const n = await adapter.close(session);
+  if (n > 0 && eventKind(readEvent(session)) !== 'ended') {
+    try { writeEvent(session, { event: 'ended', kind: 'office', agent: adapter.id, message: 'the office closed it' }); } catch { /* not an id events are kept for */ }
+  }
+  return n;
+}
+
 /** What an event says, whichever agent wrote it: one of EVENT_KINDS, or null for anything else. */
 export function eventKind(hook) {
   if (!hook || typeof hook.event !== 'string') return null;
@@ -80,10 +95,18 @@ export function eventKind(hook) {
 
 /**
  * Which session a command runs in, from its environment: { session, agent } (both null in the user's own terminal).
- * The office's own variable first (set for every session it launches), then each agent's.
+ * The office's own variables first (set for every session it launches), then each agent's.
+ * OFFICE_SESSION_ID is fixed when the session is launched, but a session can move on to a new id of its own while it
+ * runs (a new conversation in the same window). The launched agent's own variable is the live one, so when it is
+ * there it says which session this is: otherwise the board would be written as a session that has ended. Another
+ * agent's variable (left in the environment by whatever started the office) is not looked at.
  */
 export function sessionFromEnv(env = process.env) {
-  if (env[OFFICE_SESSION_ENV]) return { session: env[OFFICE_SESSION_ENV], agent: env[OFFICE_AGENT_ENV] || 'agent' };
+  if (env[OFFICE_SESSION_ENV]) {
+    const agent = env[OFFICE_AGENT_ENV] || 'agent';
+    const live = builtIns().find((a) => a.id === agent)?.sessionEnv.map((k) => env[k]).find(Boolean);
+    return { session: live || env[OFFICE_SESSION_ENV], agent };
+  }
   for (const a of builtIns()) {
     const name = a.sessionEnv.find((k) => env[k]);
     if (name) return { session: env[name], agent: a.id };

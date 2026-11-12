@@ -290,7 +290,12 @@ function hooksInstalled() {
   return hookCheck.on;
 }
 
-function summarize(s, hook, now, background) {
+// A permission prompt asks for the user for this long. A session whose window was closed at the prompt never says it
+// ended, and its event is a file the office reads again at every start: without a limit it would ask for two weeks.
+export const PERMISSION_WAIT_MS = 12 * 3600000;
+
+/** A session's summary for the office model, its status settled from its transcript and its last event. */
+export function summarize(s, hook, now, background) {
   const window = contextWindow(s);
   let status = inferStatus(s, now, { hooksInstalled: hooksInstalled() });
   let statusDetail = null;
@@ -299,10 +304,10 @@ function summarize(s, hook, now, background) {
     switch (hook.event) {
       case 'Notification':
         // Claude Code also notifies for "waiting for your input" and other FYIs; only a permission prompt needs you
-        if (/needs your permission|permission to use|requires (your )?approval/i.test(hook.message || '')) { status = 'needs_you'; statusDetail = hook.message; }
+        if (/needs your permission|permission to use|requires (your )?approval/i.test(hook.message || '')) { if (age < PERMISSION_WAIT_MS) { status = 'needs_you'; statusDetail = hook.message; } }
         else if (age < 2 * 3600000) { status = 'idle'; statusDetail = hook.message; }
         break;
-      case 'PermissionRequest': status = 'needs_you'; statusDetail = hook.tool ? `wants to use ${hook.tool}` : null; break;
+      case 'PermissionRequest': if (age < PERMISSION_WAIT_MS) { status = 'needs_you'; statusDetail = hook.tool ? `wants to use ${hook.tool}` : null; } break;
       // (start, turn-over, ended and tool are the office's own event names, written by agents other than Claude Code
       // and by the launcher: see agents/index.js)
       case 'PreToolUse': case 'PostToolUse': case 'UserPromptSubmit': case 'SubagentStart': case 'SubagentStop': case 'tool':
