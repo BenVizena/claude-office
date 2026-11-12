@@ -8,6 +8,8 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { loadSettings, saveSettings } from '../server/config.js';
+import { applySettings } from '../server/officesettings.js';
 import { readBoard, addItem, claimItem } from '../server/todos.js';
 import { writeEvent } from '../server/events.js';
 import { LOCK_FILE, runningOffice, takeInstanceLock, OfficeRunning } from '../server/instance.js';
@@ -55,6 +57,12 @@ describe('headless office', () => {
     addItem('office', { name: 'Whole office' }, { text: 'Seen by the headless office' });
     await until(() => readSnapshot()?.at > first && readSnapshot().state.todoBoards.some((b) => b.items.some((i) => i.text === 'Seen by the headless office')), 'the snapshot did not pick up a board change', 12000);
     assert.equal(fs.readdirSync(path.dirname(STATE_FILE)).filter((n) => n.startsWith('state.json.') && n.endsWith('.tmp')).length, 0, 'no temp files left');
+  });
+
+  test('a setting changed in the file (office-todo settings) is picked up', async () => {
+    assert.equal(readSnapshot().state.settings.sessionRuns, 'ask');
+    saveSettings(applySettings(loadSettings(), { sessionRuns: 'off', mergeStyle: 'squash' }));
+    await until(() => readSnapshot().state.settings.sessionRuns === 'off' && readSnapshot().state.settings.mergeStyle === 'squash', 'the office kept its old settings', 12000);
   });
 
   test('session events reach it as files: claims follow the session', async () => {

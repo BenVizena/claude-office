@@ -274,14 +274,114 @@ describe('office-todo run', () => {
     assert.match(readStatus('asker').needsYou, /Start the sequence on "Seq one"/);
     assert.match(run(b('run', a.id), { session: 'someone-else' }).err, /already asked/);
   });
-  test('refuses when the setting is off, outside a session, and in a session a sequence started', () => {
+  test('refuses when the setting is off, and in a session a sequence started', () => {
     const a = json(b('add', 'Seq three'));
     setMode('off');
     assert.match(run(b('run', a.id), { session: 'x1' }).err, /turned off sessions starting sequences/);
     setMode('allowed');
-    assert.match(run(b('run', a.id), { session: null }).err, /only a Claude Code session/);
     const r = spawnSync(process.execPath, [CLI, 'run', a.id, '--project', BOARD], { cwd: TEST_HOME, encoding: 'utf8', env: childEnv({ CLAUDE_CODE_SESSION_ID: 'step-x', CLAUDE_OFFICE_RUN: '1' }) });
     assert.match(r.stderr, /started by a sequence/);
     setMode('ask');
+  });
+});
+
+// What the web page's buttons do, typed by the user in their own terminal (no session id in the environment).
+describe('the user\'s controls', () => {
+  const user = { session: null };
+  // a real project: a git repository whose board comes from the working directory
+  const repo = fs.mkdtempSync(path.join(TEST_HOME, 'user-proj-'));
+  spawnSync('git', ['-C', repo, 'init', '-q']);
+  spawnSync('git', ['-C', repo, 'commit', '-q', '--allow-empty', '-m', 'init'], { env: childEnv() });
+  const slug = projectSlug(repo);
+  const here = (session) => ({ session, cwd: repo });
+  const item = (id) => readBoard(slug).items.find((x) => x.id === id);
+
+  test('run starts the sequence; runs shows it; stop stops it, then clears it', () => {
+    const a = json(['add', 'User seq one'], here('planner')), c = json(['add', 'User seq two'], here('planner'));
+    ok(['depend', c.id, '--on', a.id], here('planner'));
+    const out = ok(['run', a.id, '--max', '2'], here(null));
+    assert.match(out, /sequence r[0-9a-f]+ started on "User seq one": 2 open items in scope, up to 2 sessions, one at a time/);
+    assert.match(out, /No office is running, so nothing starts yet/);
+    const started = readBoard(slug).runs[0];
+    assert.deepEqual([started.root, started.by, started.max, started.bySession], [a.id, 'you', 2, undefined]);
+    assert.equal(path.resolve(started.worktree).toLowerCase(), fs.realpathSync(repo).toLowerCase());
+    assert.match(ok(['runs'], here('planner')), new RegExp(`${started.id}  "User seq one"  running`), 'anyone can look');
+    assert.match(run(['stop'], here('planner')).err, /Stopping a sequence is the user's to decide/);
+    assert.match(ok(['stop'], here(null)), /stopped the sequence on "User seq one"/);
+    assert.equal(readBoard(slug).runs[0].stopped.reason, 'stopped by you');
+    assert.match(ok(['stop', started.id], here(null)), /cleared the stopped sequence/);
+    assert.equal(readBoard(slug).runs, undefined);
+    assert.match(ok(['runs'], here(null)), /No sequences on this board/);
+  });
+
+  test('run needs a worktree of the board\'s project', () => {
+    const a = json(['add', 'User seq elsewhere'], here('planner'));
+    const r = run(['run', a.id, '--board', slug], { session: null, cwd: TEST_HOME });
+    assert.match(r.err, /is not a worktree of this board's project: run this from one, or pass --worktree/);
+    assert.match(ok(['run', a.id, '--board', slug, '--worktree', repo, '--max', '1'], { session: null, cwd: TEST_HOME }), /started on "User seq elsewhere"/);
+    ok(['stop'], here(null)); ok(['stop'], here(null));
+    assert.match(run(b('run', 'nope'), user).err, /is not a worktree|sequences run on project boards|no item/);
+  });
+
+  test('a session\'s request waits for the user, who starts it with their own numbers or dismisses it', () => {
+    const settingsFile = path.join(TEST_HOME, '.claude', 'office', 'settings.json');
+    fs.writeFileSync(settingsFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(settingsFile, 'utf8')), sessionRuns: 'ask' }));
+    const a = json(['add', 'Asked seq'], here('asker2'));
+    ok(['run', a.id, '--max', '4'], here('asker2'));
+    assert.match(ok(['request'], here(null)), /claude asker2 asks to run "Asked seq" in sequence \(up to 4 sessions/);
+    assert.match(run(['request', 'start'], here('asker2')).err, /Answering a sequence request is the user's to decide/);
+    assert.match(ok(['request', 'start', '--max', '1'], here(null)), /started on "Asked seq" as claude asker2 asked \(up to 1 session/);
+    const b2 = readBoard(slug);
+    assert.equal(b2.runRequest, undefined);
+    assert.deepEqual([b2.runs[0].by, b2.runs[0].bySession, b2.runs[0].max], ['claude asker2 (you approved)', 'asker2', 1]);
+    assert.match(readStatus('asker2').text, /The user started the sequence on "Asked seq"/);
+    ok(['stop'], here(null)); ok(['stop'], here(null));
+    const c = json(['add', 'Asked seq two'], here('asker3'));
+    ok(['run', c.id], here('asker3'));
+    assert.match(ok(['request', 'dismiss'], here(null)), /dismissed claude asker3's request to run "Asked seq two"/);
+    assert.equal(readBoard(slug).runRequest, undefined);
+    assert.match(readStatus('asker3').text, /dismissed/);
+    assert.match(ok(['request'], here(null)), /No session has asked/);
+  });
+
+  test('checks: the user approves a session\'s, their own is approved as typed, and --now runs it', () => {
+    const a = json(['add', 'Checked item'], here('checker'));
+    ok(['check', a.id, 'node', '-e', 'process.exit(0)'], here('checker'));
+    assert.equal(item(a.id).check.approved, false);
+    assert.match(run(['check', a.id, '--now'], here(null)).err, /approve the check first \(office-todo approve/);
+    assert.match(run(['approve', a.id], here('checker')).err, /Approving a check is the user's to decide/);
+    assert.match(ok(['approve', a.id], here(null)), /approved the check for "Checked item": node -e process.exit\(0\)/);
+    assert.equal(item(a.id).check.approved, true);
+    assert.match(run(['check', a.id, '--now'], here('checker')).err, /is the user's to decide/);
+    assert.match(ok(['check', a.id, '--now'], here(null)), /check passed in [\d.]+s/);
+    assert.equal(item(a.id).check.last.ok, true);
+    // the user's own check needs no approval; a failing one exits non-zero and leaves its output on the item
+    assert.match(ok(['check', a.id, 'node', '-e', 'console.log(String.fromCharCode(98,111,111,109));process.exit(3)'], here(null)), /approved: it is your own/);
+    assert.deepEqual([item(a.id).check.approved, item(a.id).check.by], [true, 'you']);
+    const failed = run(['check', a.id, '--now'], here(null));
+    assert.equal(failed.code, 1);
+    assert.match(failed.out, /boom[\s\S]*check FAILED \(exit 3\)/);
+    assert.equal(item(a.id).check.last.ok, false);
+    assert.match(ok(['show', a.id], here(null)), /check failed \(exit 3\)/);
+  });
+
+  test('settings: anyone reads them, only the user changes them, bad values change nothing', () => {
+    assert.match(ok(['settings'], here('reader')), /sessionRuns +ask +may a session start a sequence/);
+    assert.match(run(['settings', 'sessionRuns', 'allowed'], here('reader')).err, /Changing an office setting is the user's to decide/);
+    assert.match(ok(['settings', 'sessionRuns', 'allowed'], here(null)), /sessionRuns = allowed/);
+    assert.match(ok(['settings', 'autoApproveChecks', 'on'], here(null)), /autoApproveChecks = true/);
+    assert.match(ok(['settings', 'sessionRunDailyCap', '5'], here(null)), /sessionRunDailyCap = 5/);
+    assert.match(run(['settings', 'mergeStyle', 'sideways'], here(null)).err, /mergeStyle is one of: merge, squash, rebase/);
+    assert.match(run(['settings', 'autoApproveChecks', 'maybe'], here(null)).err, /autoApproveChecks is true or false/);
+    assert.match(run(['settings', 'nope'], here(null)).err, /no setting "nope"/);
+    assert.deepEqual(json(['settings', 'mergeStyle'], here(null)), { mergeStyle: 'merge' });
+    const saved = JSON.parse(fs.readFileSync(path.join(TEST_HOME, '.claude', 'office', 'settings.json'), 'utf8'));
+    assert.deepEqual([saved.sessionRuns, saved.autoApproveChecks, saved.sessionRunDailyCap, saved.mergeStyle], ['allowed', true, 5, 'merge']);
+    ok(['settings', 'autoApproveChecks', 'off'], here(null)); ok(['settings', 'sessionRuns', 'ask'], here(null));
+  });
+
+  test('office says whether one is running', () => {
+    assert.match(ok(['office'], here('reader')), /No office is running\. Start one: npm run headless/);
+    assert.deepEqual(json(['office'], here(null)), { running: false });
   });
 });

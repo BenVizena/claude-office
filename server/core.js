@@ -2,7 +2,7 @@
 // office model up to date, runs sequences, and carries out what the user asks (the actions below). A front end
 // (the web server in index.js) shows the model and calls the actions. Nothing here opens a socket or a port.
 import fs from 'node:fs';
-import { normPath, loadSettings, saveSettings, resolveBlender, syncHookCopy } from './config.js';
+import { normPath, loadSettings, saveSettings, resolveBlender, syncHookCopy, SETTINGS_FILE } from './config.js';
 import { EventReader, pruneEvents, EVENTS_DIR } from './events.js';
 import { SessionScanner } from './scanner.js';
 import { buildOffice } from './office.js';
@@ -15,7 +15,8 @@ import * as gitwork from './gitwork.js';
 import { noteLaunch, launchesToday, sessionRunPolicy } from './runpolicy.js';
 import { setStatus } from './status.js';
 import { markEnded as markNewsEnded, scanAll } from './news.js';
-import { startOnItem, assertStartable, closeSessionWindow, LAUNCH_PERMISSION_MODES } from './launch.js';
+import { startOnItem, assertStartable, closeSessionWindow } from './launch.js';
+import { applySettings } from './officesettings.js';
 import { computeUsage } from './usage.js';
 import { useNonBlockingLocks, whenUnlocked } from './lock.js';
 import { listRuns, runSummary, loadRun, imagePath, removeRun } from './results.js';
@@ -53,7 +54,10 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
     process.exit(1);
   });
   useNonBlockingLocks(); // the CLI may hold a board's lock: wait for it without freezing the office
-  let settings = loadSettings();
+  let settings, settingsStamp;
+  const stampOf = () => { try { return fs.statSync(SETTINGS_FILE).mtimeMs; } catch { return 0; } };
+  function readSettings() { settings = loadSettings(); settingsStamp = stampOf(); }
+  readSettings();
   if (syncHookCopy()) console.log('Updated the installed Claude Code hook to this version.');
   const getSettings = () => settings;
   const scanner = new SessionScanner(getSettings);
@@ -157,6 +161,8 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
   function poll() {
     // one failed pass (a file that vanished mid-read, say) must not take the office down: the next pass tries again
     try {
+      // the user may change a setting from the CLI (office-todo settings), which writes the file
+      if (stampOf() !== settingsStamp) { readSettings(); markDirty(); }
       takeEvents();
       // not before the first office model is built: until then no room is known, so launches and requests would fail
       if (state && Date.now() - lastSeq > 3000) { lastSeq = Date.now(); runSequences(); }
@@ -396,31 +402,9 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
     rejectCatalogItem: async (b) => { catalog.reject(String(b.id)); decor.removeItemEverywhere(String(b.id)); markDirty(); return { ok: true }; },
 
     changeSettings: async (b) => {
-      const allowed = ['showBackgroundSessions', 'roomMaxAgeDays', 'sessionMaxAgeDays', 'chatModel', 'decorModel', 'hiddenProjects', 'pinnedProjects'];
-      for (const k of allowed) if (b[k] !== undefined) settings[k] = b[k];
-      if (b.sessionRuns !== undefined) {
-        if (!['off', 'ask', 'allowed'].includes(b.sessionRuns)) throw new Error('sessionRuns is off, ask or allowed');
-        settings.sessionRuns = b.sessionRuns;
-      }
-      if (b.autoApproveChecks !== undefined) {
-        if (typeof b.autoApproveChecks !== 'boolean') throw new Error('autoApproveChecks is true or false');
-        settings.autoApproveChecks = b.autoApproveChecks;
-      }
-      if (b.closeFinishedSteps !== undefined) {
-        if (typeof b.closeFinishedSteps !== 'boolean') throw new Error('closeFinishedSteps is true or false');
-        settings.closeFinishedSteps = b.closeFinishedSteps;
-      }
-      if (b.launchPermissionMode !== undefined) {
-        if (!LAUNCH_PERMISSION_MODES.includes(b.launchPermissionMode)) throw new Error(`launchPermissionMode is one of: ${LAUNCH_PERMISSION_MODES.map((m) => m || '(none)').join(', ')}`);
-        settings.launchPermissionMode = b.launchPermissionMode;
-      }
-      if (b.mergeStyle !== undefined) {
-        if (!gitwork.MERGE_STYLES.includes(b.mergeStyle)) throw new Error(`mergeStyle is one of: ${gitwork.MERGE_STYLES.join(', ')}`);
-        settings.mergeStyle = b.mergeStyle;
-      }
-      if (b.sessionRunDailyCap !== undefined) settings.sessionRunDailyCap = Math.max(1, Math.min(200, Math.floor(Number(b.sessionRunDailyCap)) || 20));
+      applySettings(settings, b); // throws on a value a setting can't take, changing nothing
       saveSettings(settings);
-      settings = loadSettings();
+      readSettings();
       markDirty();
       return settings;
     },

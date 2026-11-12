@@ -38,13 +38,28 @@ export const COMMANDS = [
   { names: ['chain'], usage: 'chain <id> <id> [<id> ...] [--replace]', summary: 'set an order in one go: each waits on the one before',
     details: '--replace also drops their other dependencies on each other (for reordering); dependencies on items outside\n'
       + 'the chain are kept. --json prints {order, dropped, outside}.' },
-  { names: ['check'], usage: ['check <id> "npm test"', 'check <id> --clear', 'check <id>'],
-    summary: 'set / clear / show the command that verifies the item is done',
+  { names: ['check'], usage: ['check <id> "npm test"', 'check <id> --clear', 'check <id>', 'check <id> --now'],
+    summary: 'set / clear / show the command that verifies the item is done (--now: the user runs it)',
     details: 'Run it yourself before done. The office runs it before starting anything that depends on the item, once the\n'
-      + 'user has approved it (unless they let checks run unapproved).' },
-  { names: ['run'], usage: 'run <id> [--max N] [--parallel N]', summary: 'ask the office to run the item and what waits on it, one session per item',
-    details: 'The office starts it or asks the user first, as its setting says. --parallel N runs up to N at once, each in its\n'
-      + 'own worktree and branch, merged back into the worktree you ran it from.' },
+      + 'user has approved it (unless they let checks run unapproved). A check the user sets is approved as typed.\n'
+      + '--now (the user only) runs the approved check right here and puts the result on the item.' },
+  { names: ['approve'], usage: 'approve <id>', summary: 'the user approves the check a session set on an item',
+    details: 'Only for the user, in their own terminal: sessions can\'t approve checks.' },
+  { names: ['run'], usage: 'run <id> [--max N] [--parallel N] [--worktree <path>]', summary: 'run the item and what waits on it, one session per item',
+    details: 'From a session it asks: the office starts it or asks the user first, as its setting says. Typed by the user it\n'
+      + 'starts (the running office picks it up). --parallel N runs up to N at once, each in its own worktree and branch,\n'
+      + 'merged back into the worktree you ran it from (or --worktree).' },
+  { names: ['runs'], usage: 'runs', summary: 'the board\'s sequences (running, stopping, finished) and any request waiting for the user' },
+  { names: ['stop'], usage: 'stop [<run id>]', summary: 'the user stops a sequence (running steps finish first; again stops now)',
+    details: 'Without an id: the board\'s oldest running sequence, else its oldest stopped one. Stopping a stopped one clears\n'
+      + 'it off the board. Only for the user.' },
+  { names: ['request'], usage: ['request', 'request start [--max N] [--parallel N]', 'request dismiss'],
+    summary: 'show / start / dismiss the sequence a session asked for',
+    details: 'start runs it as asked, or with your own --max / --parallel. Only the user can start or dismiss it.' },
+  { names: ['settings'], usage: ['settings', 'settings <name>', 'settings <name> <value>'],
+    summary: 'the office settings (who may start sequences, check approval, merge style, ...)',
+    details: 'Anyone can read them; only the user changes them. A running office picks a change up within a few seconds.' },
+  { names: ['office'], usage: 'office', summary: 'is an office running (web or headless), and how fresh is its model' },
   { names: ['mine'], usage: 'mine', summary: 'items claimed by this session' },
   { names: ['completed'], usage: 'completed [--days N]', summary: 'recently completed items, newest first (default 7 days)' },
   { names: ['boards'], usage: 'boards', summary: 'every board with open and claimed counts' },

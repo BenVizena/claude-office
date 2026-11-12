@@ -10,6 +10,7 @@ import { requestRun, runsOf } from '../server/chain.js';
 import { reviewBoard, gitResolver, suggestions, STALE_DAYS } from '../server/review.js';
 import { helpText, commandHelp, findCommand } from '../server/clihelp.js';
 import { sessionRunPolicy } from '../server/runpolicy.js';
+import { userOnly, startSequence, describeRuns, stopSequence, answerRequest, approveItemCheck, runItemCheck, settingsCommand, officeStatus } from '../server/usercli.js';
 import { setStatus, clearStatus, readStatus } from '../server/status.js';
 import {
   readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, retireDetail, liveDetails, moveItem, addDependency, removeDependency, setChain, openBlockers, claimIsStale, dependents, setCheck, markReviewed,
@@ -49,7 +50,7 @@ for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a.startsWith('--')) {
     const k = a.slice(2);
-    if (['json', 'all', 'global', 'force', 'root', 'clear', 'replace', 'help'].includes(k)) flags[k] = true;
+    if (['json', 'all', 'global', 'force', 'root', 'clear', 'replace', 'help', 'now'].includes(k)) flags[k] = true;
     else flags[k] = argv[++i];
   } else pos.push(a);
 }
@@ -468,20 +469,37 @@ ${d.text}`);
     case 'check': {
       need();
       const cmdText = flags.clear ? '' : rest.slice(1).join(' ');
+      if (flags.now) {
+        // the user runs the (approved) check here and now; sessions run their check themselves, in their own shell
+        userOnly(session, 'Running a check as the office would');
+        const r = await runItemCheck(slug, id, { say: (t) => { if (!flags.json) console.log(t); } });
+        if (flags.json) print(r.result); else console.log(r.text);
+        if (!r.ok) process.exitCode = 1;
+        break;
+      }
       if (!cmdText && !flags.clear) {
         const it = readBoard(slug).items.find((x) => x.id === id || x.id.startsWith(id));
         if (!it) throw new Error(`no item ${id} on board ${slug}`);
         console.log(it.check ? `${it.check.cmd}${unapprovedNote(it.check, '  (not approved by the user yet)')}` : 'no check (set one: office-todo check <id> "npm test")');
         break;
       }
-      const r = setCheck(slug, id, { cmd: cmdText, by, session });
-      console.log(r.check
-        ? `check for "${r.text}": ${r.check.cmd}\nRun it yourself before \`done\`. ${checksAuto() ? 'The office runs it too, before starting what depends on this (the user lets checks run without approval).' : 'The office only runs it (before starting what depends on this) once the user approves it in the office.'}`
+      // the user's own check is approved as they type it; one a session sets waits for `approve`
+      const r = setCheck(slug, id, { cmd: cmdText, by: session ? by : 'you', session, approved: !session });
+      console.log(r.check && !session
+        ? `check for "${r.text}": ${r.check.cmd} (approved: it is your own)\nThe office runs it before starting what depends on this. Run it now with: office-todo check ${r.id} --now`
+        : r.check
+        ? `check for "${r.text}": ${r.check.cmd}\nRun it yourself before \`done\`. ${checksAuto() ? 'The office runs it too, before starting what depends on this (the user lets checks run without approval).' : 'The office only runs it (before starting what depends on this) once the user approves it (in the office, or office-todo approve).'}`
         : `"${r.text}" has no check now`);
       break;
     }
     case 'run': {
       need();
+      if (!session && !process.env.CLAUDE_OFFICE_RUN) {
+        // typed by the user: it is theirs to start, so it starts (a session's run, below, only asks for one)
+        const r = startSequence(slug, id, flags);
+        if (flags.json) print(r.run); else console.log(r.text);
+        break;
+      }
       const policy = sessionRunPolicy(session, loadSettings().sessionRuns, { env: process.env });
       if (policy.refuse) throw new Error(`can't start a sequence: ${policy.refuse}`);
       let here = process.cwd();
@@ -506,6 +524,45 @@ ${d.text}`);
           : started === 'gone' ? '\nThe office took the request but no sequence is running on it: board news or your status says why.'
           : '\nThe office hasn\'t picked it up yet (is it running?). Ask for another sequence only once this one shows as started: a new request replaces this one until then.');
       }
+      break;
+    }
+    case 'runs': {
+      const r = describeRuns(slug);
+      if (flags.json) print({ runs: r.runs, request: r.request }); else console.log(r.text);
+      break;
+    }
+    case 'stop': {
+      userOnly(session, 'Stopping a sequence');
+      const r = stopSequence(slug, id);
+      if (flags.json) print(r.run); else console.log(r.text);
+      break;
+    }
+    case 'request': {
+      if (!id) {
+        const r = describeRuns(slug);
+        if (flags.json) print(r.request); else console.log(r.request ? r.text.slice(r.text.indexOf('request  ')) : 'No session has asked for a sequence on this board.');
+        break;
+      }
+      userOnly(session, 'Answering a sequence request');
+      const r = answerRequest(slug, id, flags);
+      if (flags.json) print(r.run || { dismissed: true }); else console.log(r.text);
+      break;
+    }
+    case 'approve': {
+      need();
+      userOnly(session, 'Approving a check');
+      const r = approveItemCheck(slug, id);
+      if (flags.json) print(r.item); else console.log(r.text);
+      break;
+    }
+    case 'settings': {
+      const r = settingsCommand(rest, session);
+      if (flags.json) print(r.settings); else console.log(r.text);
+      break;
+    }
+    case 'office': {
+      const r = officeStatus();
+      if (flags.json) print({ running: r.running, ...(r.office || {}) }); else console.log(r.text);
       break;
     }
     case 'depend': case 'undepend': {
