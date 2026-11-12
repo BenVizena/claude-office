@@ -73,6 +73,12 @@ const DEFAULT_SETTINGS = {
   // close the terminal window of a sequence step once it is done, checked and merged (its turn is over). Steps that
   // fail or stop keep theirs open, so the user can talk to the session.
   closeFinishedSteps: true,
+  // the coding agent the office starts on board items (▶ and sequence steps; a sequence can name another): 'claude',
+  // or an id from `agents`. See server/agents/index.js.
+  defaultAgent: 'claude',
+  // more agents, each from a command template: { id: "command with {prompt} [and {session}]" | { command, label } }
+  // (server/agents/generic.js). Only the user sets it, from their terminal (office-todo settings agents '<json>').
+  agents: {},
 };
 
 /** First existing file among candidates, else null. */

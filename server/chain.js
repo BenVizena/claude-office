@@ -13,22 +13,24 @@
 // step's worktree or a dirty base sends the item back to "in progress" and stops new starts;
 // steps already running are still checked and merged ("draining"), then the run stops.
 //
-// No Claude session orchestrates any of this, so waiting costs no tokens. The user starts runs from the office; a
+// No agent session orchestrates any of this, so waiting costs no tokens. The user starts runs from the office; a
 // session can ask for one (office-todo run), which the office starts, or asks the user about, as settings.sessionRuns
 // says (see runpolicy.js).
 //
 // A board can have up to MAX_RUNS sequences going at once, as long as they don't share an open item (each would wait
 // on, or start, the other's items). Finished and stopped ones stay on the board until the user dismisses them.
 //
-// board.runs = [{ id, root, rootText, worktree, max, parallel, launched, steps, by, bySession?, startedAt,
+// board.runs = [{ id, root, rootText, worktree, max, parallel, launched, steps, by, bySession?, agent?, startedAt,
 //               active: [step], log, lastSession?, stopping?: { reason, ok }, stopped?: { reason, at, ok } }]
-// (an office from before several runs kept a single one in board.run: runsOf moves it over)
+// (an office from before several runs kept a single one in board.run: runsOf moves it over; agent is the id of the
+// coding agent each step is started with, see agents/index.js: without one, the office's default agent)
 // step      = { id, text, session?, at, phase: launching|working|checking|merging|rechecking, worktree?, branch?, baseBranch? }
-// board.runRequest = { root, rootText, max, parallel, worktree, by, bySession, at }  (a session asked; see requestRun)
+// board.runRequest = { root, rootText, max, parallel, worktree, by, bySession, agent?, at }  (a session asked; see requestRun)
 import { readBoard, mutate, children, openBlockers, claimIsStale, updateItem, addDetail, recordCheck, checkCleared } from './todos.js';
 import crypto from 'node:crypto';
 import { checkDir } from './checks.js';
 import { whenUnlocked } from './lock.js';
+import { eventKind } from './agents/index.js';
 
 export const MAX_STEPS = 15, DEFAULT_STEPS = 5, MAX_PARALLEL = 4, MAX_RUNS = 15;
 const MAX_KEPT_STOPPED = 5; // finished or stopped runs kept on a board for the user to read
@@ -109,12 +111,12 @@ function checkStartable(b, root) {
 }
 
 /** Start a run on an item. Throws if the board has MAX_RUNS going, or one of them covers an open item of this one. */
-export function startRun(slug, { root, worktree, max = DEFAULT_STEPS, parallel = 1, by = 'you', bySession }) {
+export function startRun(slug, { root, worktree, max = DEFAULT_STEPS, parallel = 1, by = 'you', bySession, agent }) {
   const n = clampInt(max, 1, MAX_STEPS, DEFAULT_STEPS), p = clampInt(parallel, 1, MAX_PARALLEL, 1);
   return mutate(slug, null, (b) => {
     const it = checkStartable(b, root);
-    const run = { id: `r${crypto.randomBytes(3).toString('hex')}`, root: it.id, rootText: it.text, worktree, max: n, parallel: p, launched: 0, steps: 0, by, ...(bySession ? { bySession } : {}), startedAt: Date.now(), active: [], log: [] };
-    logLine(run, `${by === 'you' ? 'you started it' : `${by} started it`} on "${it.text}" (up to ${n} step${n > 1 ? 's' : ''}${p > 1 ? `, ${p} at once, each in its own worktree` : ''})`);
+    const run = { id: `r${crypto.randomBytes(3).toString('hex')}`, root: it.id, rootText: it.text, worktree, max: n, parallel: p, launched: 0, steps: 0, by, ...(bySession ? { bySession } : {}), ...(agent ? { agent: String(agent) } : {}), startedAt: Date.now(), active: [], log: [] };
+    logLine(run, `${by === 'you' ? 'you started it' : `${by} started it`} on "${it.text}" (up to ${n} step${n > 1 ? 's' : ''}${p > 1 ? `, ${p} at once, each in its own worktree` : ''}${agent ? `, agent: ${agent}` : ''})`);
     const stopped = runsOf(b).filter((r) => r.stopped);
     const drop = new Set(stopped.slice(0, Math.max(0, stopped.length - (MAX_KEPT_STOPPED - 1))));
     b.runs = [...runsOf(b).filter((r) => !drop.has(r)), run];
@@ -124,11 +126,11 @@ export function startRun(slug, { root, worktree, max = DEFAULT_STEPS, parallel =
 }
 
 /** A session asks for a run (the office starts it or asks the user, per settings). One pending request per board. */
-export function requestRun(slug, { root, worktree, max = DEFAULT_STEPS, parallel = 1, by, bySession }) {
+export function requestRun(slug, { root, worktree, max = DEFAULT_STEPS, parallel = 1, by, bySession, agent }) {
   return mutate(slug, null, (b) => {
     if (b.runRequest && b.runRequest.bySession !== bySession) throw new Error(`${b.runRequest.by} already asked for one on this board; it waits for the user`);
     const it = checkStartable(b, root);
-    b.runRequest = { root: it.id, rootText: it.text, worktree, max: clampInt(max, 1, MAX_STEPS, DEFAULT_STEPS), parallel: clampInt(parallel, 1, MAX_PARALLEL, 1), by, bySession, at: Date.now() };
+    b.runRequest = { root: it.id, rootText: it.text, worktree, max: clampInt(max, 1, MAX_STEPS, DEFAULT_STEPS), parallel: clampInt(parallel, 1, MAX_PARALLEL, 1), by, bySession, ...(agent ? { agent: String(agent) } : {}), at: Date.now() };
     return { ...b.runRequest, scope: [...scopeOf(b, it.id)] };
   });
 }
@@ -158,20 +160,18 @@ export function stopRun(slug, reason = 'stopped by you', id) {
   });
 }
 
-/** A Notification hook for a session idle at its prompt (notification_type idle_prompt, or its message). */
-export const isIdleNotice = (hook) => hook?.event === 'Notification'
-  && (hook.kind === 'idle_prompt' || (!hook.kind && /waiting for your input/i.test(hook.message || '')));
-
 /**
  * Is the session's turn over (it went back to its prompt), so moving on can't race it?
- * hook: its last hook event { event, at, kind?, message? } (the office keeps them in memory), or undefined.
+ * hook: its last event { event, at, kind?, message? } (the office keeps them in memory), or undefined. What the event
+ * says (start, turn-over, ended, tool) comes from agents/index.js eventKind, whichever agent wrote it.
  */
 export function turnOver(hook, doneAt, now = Date.now()) {
-  if (!hook) return now - doneAt >= NO_HOOKS_MS;
-  if (hook.event === 'SessionEnd') return true;
-  // Claude Code's "waiting for your input" notification comes only while the session sits at its prompt, so it says the
-  // same as a Stop (and may be the only event the office sees after a restart). A permission prompt is mid-turn: not it.
-  if (hook.event === 'Stop' || isIdleNotice(hook)) return hook.at >= doneAt || now - doneAt >= TURN_GRACE_MS;
+  const kind = eventKind(hook);
+  // nothing but the launcher's own start: the agent has no hooks (or they aren't installed), so nothing says when its
+  // turn ends short of its command exiting
+  if (!hook || (kind === 'start' && hook.kind === 'launcher')) return now - doneAt >= NO_HOOKS_MS;
+  if (kind === 'ended') return true;
+  if (kind === 'turn-over') return hook.at >= doneAt || now - doneAt >= TURN_GRACE_MS;
   return now - Math.max(hook.at, doneAt) >= STUCK_TURN_MS;
 }
 
@@ -184,9 +184,9 @@ async function reopen(slug, it, note, log) {
 }
 
 /** A step that finished cleanly: close its session's terminal (its turn is over; the transcript stays). Best effort. */
-async function closeStep(ctx, step) {
+async function closeStep(ctx, step, run) {
   if (!ctx.closeSession || !step.session) return;
-  try { await ctx.closeSession(step.session); } catch { /* a window left open is harmless */ }
+  try { await ctx.closeSession(step.session, run.agent); } catch { /* a window left open is harmless */ }
 }
 
 /** One active step: 'working' | 'waiting' | 'done' | { fail: reason } (removes nothing itself). */
@@ -249,13 +249,13 @@ async function processStep(slug, board, run, step, ctx, now) {
         }
       }
       // its terminal still sits in the worktree (on Windows that alone keeps the folder from being removed)
-      await closeStep(ctx, step);
+      await closeStep(ctx, step, run);
       const rm = await g.removeStepWorktree(run.worktree, step.worktree, step.branch, { squashed: style === 'squash' });
       await patchRun(slug, run.id, (r, b) => {
         logLine(r, `${{ squash: 'squashed', rebase: 'rebased' }[style] || 'merged'} ${step.branch} into ${step.baseBranch || 'the base'}${rm.ok ? '' : ` (${rm.error})`}`);
         if (rm.leftover) b.leftovers = [...new Set([...(b.leftovers || []), JSON.stringify([run.worktree, step.worktree])])];
       });
-    } else await closeStep(ctx, step);
+    } else await closeStep(ctx, step, run);
     return 'done';
   }
   if (it.status === 'blocked') return { fail: `"${it.text}" was marked blocked${it.note ? `: ${it.note}` : ''}` };
@@ -268,7 +268,7 @@ async function processStep(slug, board, run, step, ctx, now) {
 /**
  * One round of the runner for one board: each of its running sequences in turn. ctx: { hookOf(session),
  * launch({ slug, id, worktree, step, max, run, git }) -> { session }, runCheck(cmd, cwd), git (gitwork.js),
- * notify(session, { text, needsYou }), closeSession?(session) (a cleanly finished step's terminal), canLaunch?(run) -> reason|null, autoApproveChecks?() -> bool, now? }. Returns what it did (for tests and
+ * notify(session, { text, needsYou }), closeSession?(session, agent id) (a cleanly finished step's terminal), canLaunch?(run) -> reason|null, autoApproveChecks?() -> bool, now? }. Returns what it did (for tests and
  * logs): 'idle' with none running, what the one did, or a list with several. Callers make sure two ticks for one board
  * never overlap.
  */

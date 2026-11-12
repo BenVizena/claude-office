@@ -45,19 +45,20 @@ export const COMMANDS = [
       + '--now (the user only) runs the approved check right here and puts the result on the item.' },
   { names: ['approve'], usage: 'approve <id>', summary: 'the user approves the check a session set on an item',
     details: 'Only for the user, in their own terminal: sessions can\'t approve checks.' },
-  { names: ['run'], usage: 'run <id> [--max N] [--parallel N] [--worktree <path>]', summary: 'run the item and what waits on it, one session per item',
+  { names: ['run'], usage: 'run <id> [--max N] [--parallel N] [--agent <id>] [--worktree <path>]', summary: 'run the item and what waits on it, one session per item',
     details: 'From a session it asks: the office starts it or asks the user first, as its setting says. Typed by the user it\n'
       + 'starts (the running office picks it up). --parallel N runs up to N at once, each in its own worktree and branch,\n'
-      + 'merged back into the worktree you ran it from (or --worktree).' },
+      + 'merged back into the worktree you ran it from (or --worktree). --agent picks the coding agent each step is started\n'
+      + 'with (claude, or one from the agents setting); without it, the defaultAgent setting.' },
   { names: ['runs'], usage: 'runs', summary: 'the board\'s sequences (running, stopping, finished) and any request waiting for the user' },
   { names: ['stop'], usage: 'stop [<run id>]', summary: 'the user stops a sequence (running steps finish first; again stops now)',
     details: 'Without an id: the board\'s oldest running sequence, else its oldest stopped one. Stopping a stopped one clears\n'
       + 'it off the board. Only for the user.' },
-  { names: ['request'], usage: ['request', 'request start [--max N] [--parallel N]', 'request dismiss'],
+  { names: ['request'], usage: ['request', 'request start [--max N] [--parallel N] [--agent <id>]', 'request dismiss'],
     summary: 'show / start / dismiss the sequence a session asked for',
-    details: 'start runs it as asked, or with your own --max / --parallel. Only the user can start or dismiss it.' },
+    details: 'start runs it as asked, or with your own --max / --parallel / --agent. Only the user can start or dismiss it.' },
   { names: ['settings'], usage: ['settings', 'settings <name>', 'settings <name> <value>'],
-    summary: 'the office settings (who may start sequences, check approval, merge style, ...)',
+    summary: 'the office settings (who may start sequences, check approval, merge style, agents, ...)',
     details: 'Anyone can read them; only the user changes them. A running office picks a change up within a few seconds.' },
   { names: ['office'], usage: 'office', summary: 'is an office running (web or headless), and how fresh is its model' },
   { names: ['mine'], usage: 'mine', summary: 'items claimed by this session' },

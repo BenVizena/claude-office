@@ -14,6 +14,7 @@ import { RUN_ENV } from './runpolicy.js';
 import { runningOffice } from './instance.js';
 import { readSnapshot } from './snapshot.js';
 import { USER_SETTINGS, applySettings, parseSettingValue } from './officesettings.js';
+import { agentFor } from './agents/index.js';
 
 /** Throws when called from inside an agent's session: `what` is the user's to do. */
 export function userOnly(session, what, env = process.env) {
@@ -50,15 +51,17 @@ const officeNote = () => {
     : 'No office is running, so nothing starts yet: start one (npm run headless, or npm run open for the web office) and it picks this up.';
 };
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+/** The agent id to store on a sequence: --agent <id>, else the office's default agent as it is now. Throws for one there isn't. */
+export const agentFlag = (id) => agentFor(id === undefined ? null : String(id), loadSettings()).id;
 
 /** `run <id>` typed by the user: starts the sequence (a session's `run` only asks for one). */
 export function startSequence(slug, id, flags) {
   const worktree = projectWorktree(slug, flags.worktree ? path.resolve(String(flags.worktree)) : process.cwd());
   const it = findItem(readBoard(slug), id);
-  const r = startRun(slug, { root: it.id, worktree, max: flags.max, parallel: flags.parallel });
+  const r = startRun(slug, { root: it.id, worktree, max: flags.max, parallel: flags.parallel, agent: agentFlag(flags.agent) });
   const b = readBoard(slug);
   const open = [...scopeOf(b, it.id)].filter((x) => b.items.find((i) => i.id === x)?.status !== 'done');
-  return { run: r, text: `sequence ${r.id} started on "${r.rootText}": ${plural(open.length, 'open item')} in scope, up to ${plural(r.max, 'session')}`
+  return { run: r, text: `sequence ${r.id} started on "${r.rootText}": ${plural(open.length, 'open item')} in scope, up to ${plural(r.max, 'session')}${flags.agent ? ` (${r.agent})` : ''}`
     + `${r.parallel > 1 ? `, ${r.parallel} at once (each in its own worktree and branch, merged into ${worktree})` : `, one at a time, in ${worktree}`}\n${officeNote()}\n`
     + 'Follow it with `office-todo runs`; stop it with `office-todo stop`.' };
 }
@@ -73,14 +76,14 @@ export function describeRuns(slug) {
   const out = [];
   for (const r of runs) {
     out.push(`${r.id}  "${r.rootText}"  ${stateOf(r)}`);
-    out.push(`      started ${ago(r.startedAt)} by ${r.by}; ${r.launched || 0} of up to ${plural(r.max, 'session')} started${r.parallel > 1 ? `, ${r.parallel} at once` : ''}; in ${r.worktree}`);
+    out.push(`      started ${ago(r.startedAt)} by ${r.by}; ${r.launched || 0} of up to ${plural(r.max, 'session')} started${r.parallel > 1 ? `, ${r.parallel} at once` : ''}${r.agent ? `; agent ${r.agent}` : ''}; in ${r.worktree}`);
     for (const s of r.active || []) out.push(`      ▶ ${s.id}  ${s.text || ''}${s.phase ? `  (${s.phase})` : ''}${s.session ? `  session ${String(s.session).slice(0, 8)}` : ''}`);
     for (const l of (r.log || []).slice(-3)) out.push(`      ${new Date(l.at).toLocaleTimeString()}  ${l.text}`);
   }
   const q = b.runRequest;
   if (q) {
-    out.push(`request  ${q.by} asks to run "${q.rootText}" in sequence (up to ${plural(q.max, 'session')}${q.parallel > 1 ? `, ${q.parallel} at once` : ''}, in ${q.worktree}), ${ago(q.at)}`);
-    out.push('      office-todo request start [--max N] [--parallel N]   |   office-todo request dismiss');
+    out.push(`request  ${q.by} asks to run "${q.rootText}" in sequence (up to ${plural(q.max, 'session')}${q.parallel > 1 ? `, ${q.parallel} at once` : ''}${q.agent ? `, agent ${q.agent}` : ''}, in ${q.worktree}), ${ago(q.at)}`);
+    out.push('      office-todo request start [--max N] [--parallel N] [--agent <id>]   |   office-todo request dismiss');
   }
   return { runs, request: q || null, text: out.length ? out.join('\n') : 'No sequences on this board, and none asked for.' };
 }
@@ -106,9 +109,9 @@ export function answerRequest(slug, action, flags) {
     tell({ text: 'The user dismissed the sequence request' });
     return { text: `dismissed ${req.by}'s request to run "${req.rootText}"` };
   }
-  if (action !== 'start') throw new Error('usage: office-todo request [start [--max N] [--parallel N] | dismiss]');
+  if (action !== 'start') throw new Error('usage: office-todo request [start [--max N] [--parallel N] [--agent <id>] | dismiss]');
   const worktree = projectWorktree(slug, req.worktree);
-  const r = startRun(slug, { root: req.root, worktree, max: flags.max ?? req.max, parallel: flags.parallel ?? req.parallel, by: `${req.by} (you approved)`, bySession: req.bySession });
+  const r = startRun(slug, { root: req.root, worktree, max: flags.max ?? req.max, parallel: flags.parallel ?? req.parallel, by: `${req.by} (you approved)`, bySession: req.bySession, agent: agentFlag(flags.agent ?? req.agent) });
   tell({ text: `The user started the sequence on "${req.rootText}"` });
   return { run: r, text: `sequence ${r.id} started on "${r.rootText}" as ${req.by} asked (up to ${plural(r.max, 'session')}${r.parallel > 1 ? `, ${r.parallel} at once` : ''}, in ${worktree})\n${officeNote()}` };
 }
@@ -153,7 +156,7 @@ export function settingsCommand(rest, session) {
   if (!def) throw new Error(`no setting "${name}" (office-todo settings lists them)`);
   if (!value.length) return { settings: { [name]: cur[name] }, text: `${name} = ${shown(cur[name])}\n${def.about}` };
   userOnly(session, 'Changing an office setting');
-  applySettings(cur, { [name]: parseSettingValue(name, value.join(' ')) });
+  applySettings(cur, { [name]: parseSettingValue(name, value.join(' ')) }, { cli: true });
   saveSettings(cur);
   return { settings: { [name]: cur[name] }, text: `${name} = ${shown(cur[name])}${runningOffice() ? ' (the running office picks it up within a few seconds)' : ''}` };
 }

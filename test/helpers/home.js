@@ -9,7 +9,9 @@ const realHome = os.homedir();
 export const TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-office-test-'));
 process.env.HOME = TEST_HOME;
 process.env.USERPROFILE = TEST_HOME; // what os.homedir() reads on Windows
-delete process.env.CLAUDE_CODE_SESSION_ID;
+// what tells the CLI it runs inside an agent's session (server/agents/index.js SESSION_ENV; not imported: this file
+// must set the home directory before any server module loads)
+for (const k of ['CLAUDE_CODE_SESSION_ID', 'OFFICE_SESSION_ID', 'OFFICE_AGENT']) delete process.env[k];
 delete process.env.CLAUDE_OFFICE_RUN; // set when the tests run inside a sequence step: it changes what the CLI allows
 delete process.env.OFFICE_PORT;
 // git in the temp home has no identity: merges and commits in test repos need one

@@ -1,4 +1,4 @@
-// The office itself, with no way in or out but function calls: it watches Claude Code transcripts + git, keeps the
+// The office itself, with no way in or out but function calls: it watches session transcripts and events + git, keeps the
 // office model up to date, runs sequences, and carries out what the user asks (the actions below). A front end
 // (the web server in index.js) shows the model and calls the actions. Nothing here opens a socket or a port.
 import fs from 'node:fs';
@@ -15,7 +15,8 @@ import * as gitwork from './gitwork.js';
 import { noteLaunch, launchesToday, sessionRunPolicy } from './runpolicy.js';
 import { setStatus } from './status.js';
 import { markEnded as markNewsEnded, scanAll } from './news.js';
-import { startOnItem, assertStartable, closeSessionWindow } from './launch.js';
+import { startOnItem, assertStartable } from './launch.js';
+import { agentFor, listAgents, eventKind, DEFAULT_AGENT } from './agents/index.js';
 import { applySettings } from './officesettings.js';
 import { computeUsage } from './usage.js';
 import { useNonBlockingLocks, whenUnlocked } from './lock.js';
@@ -83,7 +84,8 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
       state.checksRunning = [...checksRunning];
       attachNews(state, boards);
       state.settings = { soundHint: true, showBackgroundSessions: settings.showBackgroundSessions, blender: !!resolveBlender(settings),
-        sessionRuns: settings.sessionRuns, sessionRunDailyCap: settings.sessionRunDailyCap, launchPermissionMode: settings.launchPermissionMode || '', autoApproveChecks: !!settings.autoApproveChecks, mergeStyle: settings.mergeStyle || 'merge', closeFinishedSteps: settings.closeFinishedSteps !== false };
+        sessionRuns: settings.sessionRuns, sessionRunDailyCap: settings.sessionRunDailyCap, launchPermissionMode: settings.launchPermissionMode || '', autoApproveChecks: !!settings.autoApproveChecks, mergeStyle: settings.mergeStyle || 'merge', closeFinishedSteps: settings.closeFinishedSteps !== false,
+        defaultAgent: settings.defaultAgent || DEFAULT_AGENT, agents: listAgents(settings) };
       writeSnapshot(state, mode);
       onState(state);
     } catch (e) {
@@ -124,7 +126,8 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
       return;
     }
     try {
-      await whenUnlocked(() => startRun(slug, { root: req.root, worktree: pod.path, max: req.max, parallel: req.parallel, by: req.by, bySession: req.bySession }));
+      const agent = agentFor(req.agent, settings).id; // one that is gone since it asked: say so now, not at the first step
+      await whenUnlocked(() => startRun(slug, { root: req.root, worktree: pod.path, max: req.max, parallel: req.parallel, by: req.by, bySession: req.bySession, agent }));
       notify(req.bySession, { text: `Sequence started on "${req.rootText}" (sessions may start sequences)` });
     } catch (e) {
       await whenUnlocked(() => dropRequest(slug));
@@ -136,7 +139,9 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
     {
       hookOf: (session) => hooks.get(session),
       launch: async ({ slug, id, worktree, step, max, run, branch }) => {
-        const r = await whenUnlocked(() => startOnItem({ room: findRoom(slug), id, worktree, claudePath: settings.claudePath, permissionMode: settings.launchPermissionMode, step: { n: step, max, branch } }));
+        // the agent the sequence was started with (an older run has none: the default; one that is gone stops the run, saying so)
+        const agent = agentFor(run.agent, settings);
+        const r = await whenUnlocked(() => startOnItem({ room: findRoom(slug), id, worktree, agent, permissionMode: settings.launchPermissionMode, step: { n: step, max, branch } }));
         await whenUnlocked(() => noteLaunch(r.session, { fromSession: !!run.bySession, board: slug, item: id })).catch((e) => console.error('run log:', e.message));
         return r;
       },
@@ -148,7 +153,7 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
       mergeStyle: () => settings.mergeStyle,
       git: gitwork,
       notify,
-      closeSession: (session) => (settings.closeFinishedSteps ? closeSessionWindow(session) : null),
+      closeSession: (session, agent) => (settings.closeFinishedSteps ? agentFor(agent, settings).close(session) : null),
       onRequest: (slug) => handleRequest(slug),
       changed: () => markDirty(),
     },
@@ -198,7 +203,7 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
         const c = it.claim;
         const h = c && it.status !== 'done' && hooks.get(c.session);
         if (!h) continue;
-        if (h.event === 'SessionEnd') { if (!c.ended) todo.set(c.session, h.at); }
+        if (eventKind(h) === 'ended') { if (!c.ended) todo.set(c.session, h.at); }
         else if ((c.ended && h.at > c.ended) || c.pending) todo.set(c.session, null);
       }
     }
@@ -211,19 +216,19 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
     for (const { session, hook } of events.changes()) {
       hooks.set(session, hook);
       markDirty();
-      const ev = hook.event;
-      if (ev === 'Stop' || ev === 'SessionEnd') nudge = true;
+      const ev = hook.event, kind = eventKind(hook); // kind: start, turn-over, ended or tool, whichever agent wrote it
+      if (kind === 'turn-over' || kind === 'ended') nudge = true;
       // one event that can't be handled (a transcript that vanished mid-scan, say) must not lose the ones after it
       try {
-        if (['SessionStart', 'Stop', 'SessionEnd', 'UserPromptSubmit', 'Notification', 'PreCompact', 'PermissionRequest'].includes(ev)) {
+        if ((kind && kind !== 'tool') || ['UserPromptSubmit', 'Notification', 'PreCompact', 'PermissionRequest'].includes(ev)) {
           scanner.scan();
           onEvent({ event: ev, sessionId: session, message: hook.message || null });
         }
-        if (ev === 'SessionEnd') {
+        if (kind === 'ended') {
           markClaims(session, hook.at);
           // its news file stays for a resume; just note that it ended
           whenUnlocked(() => markNewsEnded(session)).catch((e) => console.error('news end failed:', e.message));
-        } else if (ev === 'SessionStart' || ev === 'UserPromptSubmit') markClaims(session, null);
+        } else if (kind === 'start' || ev === 'UserPromptSubmit') markClaims(session, null);
       } catch (e) {
         console.error(`handling ${ev} of session ${session} failed:`, e);
       }
@@ -272,11 +277,13 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
       return r;
     },
 
-    // "Start a session on this": a new interactive claude in a terminal window, with the item claimed for it
+    // "Start a session on this": a new interactive session of an agent (b.agent, else the office's default) in a
+    // terminal window, with the item claimed for it
     // (newWorktree: in a new worktree and branch made from the picked one's HEAD, left for the user to merge)
     startSession: async (b) => {
       const room = findRoom(String(b.board)), id = String(b.id);
-      const start = (worktree, own) => startOnItem({ room, id, worktree, own, claudePath: settings.claudePath, permissionMode: settings.launchPermissionMode });
+      const agent = agentFor(b.agent ? String(b.agent) : null, settings);
+      const start = (worktree, own) => startOnItem({ room, id, worktree, own, agent, permissionMode: settings.launchPermissionMode });
       let r;
       if (b.newWorktree) {
         assertStartable(room, id);
@@ -316,7 +323,8 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
       if (room?.kind !== 'project') throw new Error('sequences run on project boards');
       const pod = room.pods.find((p) => !p.removed && normPath(p.path) === normPath(String(b.worktree || '')));
       if (!pod) throw new Error('that worktree is not part of this project');
-      const r = await whenUnlocked(() => startRun(room.key, { root: String(b.id), worktree: pod.path, max: b.max, parallel: b.parallel }));
+      const agent = agentFor(b.agent ? String(b.agent) : null, settings).id; // the default agent as it is now; throws for one there isn't
+      const r = await whenUnlocked(() => startRun(room.key, { root: String(b.id), worktree: pod.path, max: b.max, parallel: b.parallel, agent }));
       markDirty();
       setTimeout(runSequences, 50);
       return r;
@@ -332,7 +340,8 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
       } else {
         const pod = podFor(findRoom(slug), req.worktree);
         if (!pod) throw new Error(`${req.worktree} is not a worktree of this project any more`);
-        await whenUnlocked(() => startRun(slug, { root: req.root, worktree: pod.path, max: b.max ?? req.max, parallel: b.parallel ?? req.parallel, by: `${req.by} (you approved)`, bySession: req.bySession }));
+        const agent = agentFor(b.agent || req.agent ? String(b.agent || req.agent) : null, settings).id;
+        await whenUnlocked(() => startRun(slug, { root: req.root, worktree: pod.path, max: b.max ?? req.max, parallel: b.parallel ?? req.parallel, by: `${req.by} (you approved)`, bySession: req.bySession, agent }));
         notify(req.bySession, { text: `The user started the sequence on "${req.rootText}"` });
         setTimeout(runSequences, 50);
       }

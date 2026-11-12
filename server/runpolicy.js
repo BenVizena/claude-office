@@ -34,7 +34,7 @@ export function launchesToday(now = Date.now()) {
  * Returns { refuse: reason } or { ask: true } (the user approves it on the board) or { allowed: true }.
  */
 export function sessionRunPolicy(session, mode, { env = {} } = {}) {
-  if (!session) return { refuse: 'only a Claude Code session can ask for a sequence' };
+  if (!session) return { refuse: 'only an agent session can ask for a sequence' };
   if (env[RUN_ENV] || isRunSession(session)) return { refuse: 'this session was started by a sequence, and those never start sequences themselves (ask the user to start one from the board)' };
   if (mode === 'off') return { refuse: 'the user has turned off sessions starting sequences (office setting): ask them to start it from the board' };
   return mode === 'allowed' ? { allowed: true } : { ask: true };

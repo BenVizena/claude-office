@@ -1,6 +1,8 @@
 // Session events, one small file per session: ~/.claude/office/events/<session>.json holds the session's LAST event
 // { event, at, tool?, message?, kind?, cwd? }. A session's hook writes it (hooks/office-hook.mjs for Claude Code) and
-// the office reads the folder, so nothing has to listen on a port. Only the last event is kept: what the office needs
+// the office reads the folder, so nothing has to listen on a port. `event` is start, turn-over, ended or tool, or an
+// agent's own name for one (Claude Code's hook names): agents/index.js eventKind says which. The launcher script of a
+// session the office starts writes start and ended itself, with kind 'launcher' (scripts/session-event.js). Only the last event is kept: what the office needs
 // to know is where each session stands now (working, back at its prompt, ended).
 import fs from 'node:fs';
 import path from 'node:path';

@@ -1,18 +1,20 @@
-// "Start a session on this": opens a terminal window running an interactive `claude` in one of the project's
-// worktrees, with a new session id that is claimed on the item before it starts. It is an ordinary session: the user
+// "Start a session on this": opens a terminal window running a coding agent (Claude Code, or another adapter from
+// server/agents) in one of the project's worktrees, with a new session id that is claimed on the item before it starts. It is an ordinary session: the user
 // sees it, approves its permissions (in the mode settings.launchPermissionMode picks) and can talk to it. Nothing the user typed goes on the command line —
 // the prompt only names the item id and board, and the session reads the item itself with office-todo.
-import { spawn, spawnSync, execFile } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { STAFF_DIR, REPO_DIR, claudeCommand, normPath } from './config.js';
+import { STAFF_DIR, REPO_DIR, normPath } from './config.js';
 import { claimItem, releaseItem, readBoard, claimIsStale, recordLaunch } from './todos.js';
 import { subscribe } from './news.js';
 import { RUN_ENV } from './runpolicy.js';
+import { agentFor, CLEAR_ENV, OFFICE_SESSION_ENV, OFFICE_AGENT_ENV } from './agents/index.js';
 
 const LAUNCH_DIR = path.join(STAFF_DIR, '..', 'launch');
 const CLI = path.join(REPO_DIR, 'bin', 'office-todo.js').replace(/\\/g, '/');
+const EVENT_SCRIPT = path.join(REPO_DIR, 'scripts', 'session-event.js');
 
 export function promptFor(board, id, step, own) {
   return `You were started from the Claude Office to-do board to work on item ${id} (board ${board}). `
@@ -48,16 +50,6 @@ export function promptFor(board, id, step, own) {
       + `to merge into ${own.baseBranch}. Do not merge, rebase or push it yourself unless the user asks.` : '');
 }
 
-// Permission modes the office may start sessions in ('' passes no flag: the user's own Claude Code default applies).
-// 'dontAsk' and 'plan' are left out: a session that may not ask, or may not act, can't do a board item on its own.
-export const LAUNCH_PERMISSION_MODES = ['', 'manual', 'acceptEdits', 'auto', 'bypassPermissions'];
-
-/** The claude arguments for a launched session. */
-export function launchArgs({ session, prompt, permissionMode = '' }) {
-  if (!LAUNCH_PERMISSION_MODES.includes(permissionMode)) throw new Error(`unknown permission mode ${permissionMode}`);
-  return [...(permissionMode ? ['--permission-mode', permissionMode] : []), '--session-id', session, prompt];
-}
-
 /** Throws with a readable message when the item can't be started (checked before the office makes anything for it). */
 export function assertStartable(room, id) {
   if (room?.kind !== 'project') throw new Error('sessions can only be started on a project board');
@@ -71,8 +63,9 @@ export function assertStartable(room, id) {
 /**
  * Throws with a readable message when the item can't be started. Returns { session, worktree }. `own` is a worktree
  * the office just made for a plain ▶ start ({ worktree, branch, baseBranch }, from gitwork.createStepWorktree).
+ * `agent` is the adapter to start (agents/index.js agentFor); without one, Claude Code.
  */
-export function startOnItem({ room, id, worktree, claudePath, step, own, permissionMode = '' }) {
+export function startOnItem({ room, id, worktree, agent = agentFor('claude'), step, own, permissionMode = '' }) {
   if (room?.kind !== 'project') throw new Error('sessions can only be started on a project board');
   // a parallel sequence step, or a ▶ "in a new worktree", runs in a worktree the office just made inside one of the
   // project's worktrees
@@ -83,17 +76,18 @@ export function startOnItem({ room, id, worktree, claudePath, step, own, permiss
   assertStartable(room, id);
 
   const session = crypto.randomUUID();
-  // pending until the session's SessionStart arrives: a launch that never starts frees the item after a few minutes
-  claimItem(room.key, id, { by: `claude ${session.slice(0, 8)}`, session, force: false, pending: true });
+  // pending until the session's first event arrives (the launcher's start): a launch that never starts frees the item
+  // after a few minutes
+  claimItem(room.key, id, { by: `${agent.id} ${session.slice(0, 8)}`, session, force: false, pending: true });
   // follow the item from now, so news from before the session's first hook isn't missed (best effort: never retried,
   // since a retry would launch a second session)
   try { subscribe(session, readBoard(room.key), id, 'claim'); } catch { /* the office subscribes it on its first hook */ }
   try { recordLaunch(room.key, id, { session, worktree: pod.path }); } catch { /* only used to pick where its check runs */ }
   try {
-    const [cmd, pre] = claudeCommand(claudePath);
-    openTerminal({ cwd: pod.path, argv: [cmd, ...pre, ...launchArgs({ session, prompt: promptFor(room.key, id, step, own), permissionMode })],
-      title: `Claude: ${room.name} ${id}${step ? ` (step ${step.n})` : ''}`, name: session, env: step ? { [RUN_ENV]: '1' } : {},
-      // a step's window goes away with its session (the office ends it once the step is merged, see closeSessionWindow)
+    openTerminal({ cwd: pod.path, argv: agent.command({ session, prompt: promptFor(room.key, id, step, own), permissionMode }),
+      title: `${agent.label}: ${room.name} ${id}${step ? ` (step ${step.n})` : ''}`, name: session, session,
+      env: { [OFFICE_SESSION_ENV]: session, [OFFICE_AGENT_ENV]: agent.id, ...(step ? { [RUN_ENV]: '1' } : {}) },
+      // a step's window goes away with its session (the office ends it once the step is merged: the adapter's close)
       closeOnExit: !!step });
   } catch (e) {
     releaseItem(room.key, id, { by: 'office' });
@@ -105,35 +99,80 @@ export function startOnItem({ room, id, worktree, claudePath, step, own, permiss
 // ---- opening a terminal window, per platform ----
 // The command goes in a small launcher script (no shell quoting through spawn), which the terminal runs.
 
-// Markers a Claude session puts in its children's environment. The office is often started from inside a session (the
-// setup skill does), so it inherits them, and a launched session that sees them thinks it is a child: it stops saving
-// its transcript, and the office, which finds sessions by their transcripts, never shows it.
-export const INHERITED_SESSION_VARS = ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT'];
+// What a launched session must not inherit from the office's own environment (the office is often started from inside
+// a session): each agent's own markers (see agents/claude.js), the office's session variables, and the sequence marker.
+export const INHERITED_SESSION_VARS = [...new Set([...CLEAR_ENV, RUN_ENV])];
+// what the office sets for a session: taken away again when its agent exits, so whatever the user starts next in
+// that terminal is not taken for the session
+const SESSION_ONLY_VARS = [OFFICE_SESSION_ENV, OFFICE_AGENT_ENV, RUN_ENV];
 
 const cmdQuote = (s) => `"${String(s).replace(/%/g, '%%').replace(/"/g, '""')}"`;
+// `call` reads its line a second time, so a % needs doubling twice
+const callQuote = (s) => `"${String(s).replace(/%/g, '%%%%').replace(/"/g, '""')}"`;
 const shQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
-/** Runs argv in a new terminal window in cwd (also used by scripts/open.js to start the office itself). `name` names
- *  the launcher script. Throws when no terminal can be opened. */
-export function openTerminal({ cwd, argv, title, name, env = {}, closeOnExit = false }) {
+/** On Windows: does this command name a batch file (as cmd.exe finds it: the folder it runs in, then PATH, by PATHEXT)? */
+function isBatchFile(cmd, cwd) {
+  if (/\.(cmd|bat)$/i.test(cmd)) return true;
+  if (path.extname(cmd)) return false;
+  const exts = (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean);
+  const dirs = /[\\/]/.test(cmd) ? [cwd] : [cwd, ...(process.env.PATH || '').split(path.delimiter).filter(Boolean)];
+  for (const d of dirs) {
+    for (const e of exts) {
+      try { if (fs.statSync(path.resolve(d, cmd + e)).isFile()) return /^\.(cmd|bat)$/i.test(e); } catch { /* not there */ }
+    }
+  }
+  return false;
+}
+
+/**
+ * Writes the launcher script for argv in cwd and returns its path. `name` names the script. With `session` (a
+ * session the office starts) it also records a start event before the command and an ended event after it
+ * (scripts/session-event.js), so the office follows agents that have no hooks of their own.
+ */
+export function writeLauncher({ cwd, argv, title = '', name, env = {}, closeOnExit = false, session }) {
   fs.mkdirSync(LAUNCH_DIR, { recursive: true });
   cleanOldLaunchers();
+  const event = (what) => [process.execPath, EVENT_SCRIPT, session, what];
   if (process.platform === 'win32') {
     const file = path.join(LAUNCH_DIR, `${name}.cmd`);
     fs.writeFileSync(file, ['@echo off', `title ${title.replace(/[^\w .:-]/g, '')}`, `cd /d ${cmdQuote(cwd)}`,
       ...INHERITED_SESSION_VARS.map((k) => `set "${k}="`),
       ...Object.entries(env).map(([k, v]) => `set "${k}=${String(v).replace(/["%]/g, '')}"`),
-      argv.map(cmdQuote).join(' '), ...(closeOnExit ? ['exit 0'] : []), ''].join('\r\n'));
+      ...(session ? [
+        event('start').map(cmdQuote).join(' '),
+        // an agent that is a .cmd shim (npm installs are) needs `call`: a batch file started without it never comes
+        // back here. (Not for the rest: `call` doubles any ^ in the arguments.)
+        isBatchFile(argv[0], cwd) ? `call ${argv.map(callQuote).join(' ')}` : argv.map(cmdQuote).join(' '),
+        event('ended').map(cmdQuote).join(' '),
+        ...SESSION_ONLY_VARS.map((k) => `set "${k}="`),
+      ] : [argv.map(cmdQuote).join(' ')]),
+      ...(closeOnExit ? ['exit 0'] : []), ''].join('\r\n'));
+    return file;
+  }
+  const file = path.join(LAUNCH_DIR, `${name}.command`);
+  const exports = `unset ${INHERITED_SESSION_VARS.join(' ')}\n` + Object.entries(env).map(([k, v]) => `export ${k}=${shQuote(v)}\n`).join('');
+  const line = (a) => a.map(shQuote).join(' ');
+  const body = session
+    ? `${line(event('start'))}\n${line(argv)}\ncode=$?\n${line(event('ended'))}\nexit $code\n`
+    : `exec ${line(argv)}\n`;
+  fs.writeFileSync(file, `#!/bin/sh\ncd ${shQuote(cwd)} || exit 1\n${exports}${body}`, { mode: 0o755 });
+  return file;
+}
+
+/** Runs argv in a new terminal window in cwd (also used by scripts/open.js to start the office itself): see
+ *  writeLauncher for the options. Throws when no terminal can be opened. */
+export function openTerminal(opts) {
+  const file = writeLauncher(opts);
+  if (process.platform === 'win32') {
+    const title = (opts.title || '').replace(/[^\w .:-]/g, '');
     // `start` gives it its own console window; the launcher path is ours, so verbatim arguments are safe here
-    const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `start "${title.replace(/[^\w .:-]/g, '')}" "${file}"`],
+    const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `start "${title}" "${file}"`],
       { detached: true, stdio: 'ignore', windowsVerbatimArguments: true, windowsHide: true });
     child.on('error', (e) => console.error('could not open a terminal:', e.message));
     child.unref();
     return;
   }
-  const file = path.join(LAUNCH_DIR, `${name}.command`);
-  const exports = `unset ${INHERITED_SESSION_VARS.join(' ')}\n` + Object.entries(env).map(([k, v]) => `export ${k}=${shQuote(v)}\n`).join('');
-  fs.writeFileSync(file, `#!/bin/sh\ncd ${shQuote(cwd)} || exit 1\n${exports}exec ${argv.map(shQuote).join(' ')}\n`, { mode: 0o755 });
   if (process.platform === 'darwin') {
     spawn('open', ['-a', 'Terminal', file], { detached: true, stdio: 'ignore' }).unref();
     return;
@@ -142,35 +181,6 @@ export function openTerminal({ cwd, argv, title, name, env = {}, closeOnExit = f
   const found = terms.find(([t]) => spawnSync('which', [t], { stdio: 'ignore' }).status === 0);
   if (!found) throw new Error(`no terminal emulator found; run it yourself: sh ${file}`);
   spawn(found[0], found[1], { detached: true, stdio: 'ignore' }).unref();
-}
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const run = (cmd, args) => new Promise((resolve) => {
-  execFile(cmd, args, { timeout: 20000, windowsHide: true }, (err, stdout) => resolve({ ok: !err, stdout: String(stdout || '') }));
-});
-
-/**
- * Ends a session the office launched, so its terminal window closes: finds the claude process by the --session-id it
- * was started with and kills it with its children (a step's launcher then exits 0, so even a Windows Terminal tab
- * closes). Only call it once the session's turn is over: its transcript is saved by then. Resolves to how many
- * processes matched.
- */
-export async function closeSessionWindow(session) {
-  if (!UUID.test(String(session))) return 0;
-  if (process.platform === 'win32') {
-    // the launcher quotes each argument ("--session-id" "<id>"); `claude --resume <id>` elsewhere is not matched.
-    // (the query's own command line holds the id too: leave it out)
-    const ps = `Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%session-id%${session}%'" | Where-Object { $_.ProcessId -ne $PID } | ForEach-Object { $_.ProcessId }`;
-    const found = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps]);
-    const pids = found.stdout.split(/\s+/).filter((p) => /^\d+$/.test(p));
-    for (const pid of pids) await run('taskkill.exe', ['/PID', pid, '/T', '/F']);
-    return pids.length;
-  }
-  // the launcher execs claude, so its terminal closes when claude exits
-  const found = await run('pgrep', ['-f', '--', `session-id.${session}`]);
-  const pids = found.stdout.split(/\s+/).filter((p) => /^\d+$/.test(p) && Number(p) !== process.pid);
-  for (const pid of pids) { try { process.kill(Number(pid), 'SIGTERM'); } catch { /* already gone */ } }
-  return pids.length;
 }
 
 /** Launcher scripts are only needed for a moment: drop ones older than a day. */

@@ -22,7 +22,7 @@ const add = (slug, text, extra = {}) => addItem(slug, { name: 'P', root: TEST_HO
 /** A fake office: launches claim the item; hooks/checks are whatever the test sets. */
 function office(slug) {
   const o = {
-    launched: [], closed: [], hooks: new Map(), checks: [], checkResult: { ok: true, code: 0, output: 'fine', ms: 1 }, notified: [],
+    launched: [], closed: [], closedWith: [], hooks: new Map(), checks: [], checkResult: { ok: true, code: 0, output: 'fine', ms: 1 }, notified: [],
     ctx: {
       hookOf: (s) => o.hooks.get(s),
       launch: async ({ id, step, max }) => {
@@ -33,7 +33,7 @@ function office(slug) {
       },
       runCheck: async (cmd, cwd) => { o.checks.push({ cmd, cwd }); return o.checkResult; },
       notify: (session, st) => o.notified.push({ session, ...st }),
-      closeSession: async (session) => { o.closed.push(session); },
+      closeSession: async (session, agent) => { o.closed.push(session); o.closedWith.push(agent); },
     },
     /** the worker marks its item done and its turn ends */
     finish(id) {
@@ -505,7 +505,7 @@ describe('requests and policy', () => {
     assert.ok(sessionRunPolicy('free', 'ask').ask);
     assert.ok(sessionRunPolicy('free', 'allowed').allowed);
     assert.match(sessionRunPolicy('free', 'off').refuse, /turned off/);
-    assert.match(sessionRunPolicy(null, 'allowed').refuse, /only a Claude Code session/);
+    assert.match(sessionRunPolicy(null, 'allowed').refuse, /only an agent session/);
     assert.match(sessionRunPolicy('free', 'allowed', { env: { [RUN_ENV]: '1' } }).refuse, /started by a sequence/);
     noteLaunch('step-sess', { fromSession: true });
     noteLaunch('user-step', { fromSession: false });
@@ -530,6 +530,17 @@ describe('turnOver', () => {
     assert.equal(turnOver({ event: 'Notification', kind: 'permission_prompt', message: 'Claude needs your permission to use Bash', at: t + 5 }, t, t + 600000), false);
     assert.equal(turnOver({ event: 'Notification', message: 'Claude needs your permission to use Bash', at: t + 5 }, t, t + 600000), false);
     assert.equal(turnOver(undefined, t, t + 5 * 60000), true);
+  });
+  test('the office\'s own event names, as any agent writes them', () => {
+    assert.equal(turnOver({ event: 'turn-over', at: t + 5 }, t, t + 10), true);
+    assert.equal(turnOver({ event: 'turn-over', at: t - 5 }, t, t + 10), false, 'from before it was done: maybe a new turn started');
+    assert.equal(turnOver({ event: 'ended', at: t - 5 }, t, t + 1), true);
+    assert.equal(turnOver({ event: 'tool', at: t + 5 }, t, t + 60000), false, 'still working');
+    assert.equal(turnOver({ event: 'start', at: t - 5 }, t, t + 6 * 60000), false, 'an agent that reports its turns: wait for one to end');
+    // an agent with no hooks: the launcher's start is all there is until its command exits
+    assert.equal(turnOver({ event: 'start', kind: 'launcher', at: t - 5 }, t, t + 1000), false);
+    assert.equal(turnOver({ event: 'start', kind: 'launcher', at: t - 5 }, t, t + 5 * 60000), true);
+    assert.equal(turnOver({ event: 'ended', kind: 'launcher', at: t + 5 }, t, t + 10), true);
   });
 });
 
@@ -583,7 +594,7 @@ describe('step prompts', () => {
 
 describe('launch permission mode', () => {
   test('no flag by default; the chosen mode goes before the session id; unknown modes are refused', async () => {
-    const { launchArgs, LAUNCH_PERMISSION_MODES } = await import('../server/launch.js');
+    const { launchArgs, LAUNCH_PERMISSION_MODES } = await import('../server/agents/claude.js');
     assert.deepEqual(launchArgs({ session: 's1', prompt: 'p' }), ['--session-id', 's1', 'p']);
     assert.deepEqual(launchArgs({ session: 's1', prompt: 'p', permissionMode: 'auto' }), ['--permission-mode', 'auto', '--session-id', 's1', 'p']);
     for (const m of LAUNCH_PERMISSION_MODES.filter(Boolean)) assert.equal(launchArgs({ session: 's', prompt: 'p', permissionMode: m })[1], m);

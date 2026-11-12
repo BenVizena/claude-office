@@ -274,13 +274,17 @@ function summarize(s, hook, now, background) {
         else if (age < 2 * 3600000) { status = 'idle'; statusDetail = hook.message; }
         break;
       case 'PermissionRequest': status = 'needs_you'; statusDetail = hook.tool ? `wants to use ${hook.tool}` : null; break;
-      case 'PreToolUse': case 'PostToolUse': case 'UserPromptSubmit': case 'SubagentStart': case 'SubagentStop':
+      // (start, turn-over, ended and tool are the office's own event names, written by agents other than Claude Code
+      // and by the launcher: see agents/index.js)
+      case 'PreToolUse': case 'PostToolUse': case 'UserPromptSubmit': case 'SubagentStart': case 'SubagentStop': case 'tool':
         if (age < 10 * 60000) status = 'working';
         break;
       case 'PreCompact': if (age < 5 * 60000) status = 'compacting'; break;
-      case 'Stop': if (age < 2 * 3600000) status = 'idle'; break;
+      case 'Stop': case 'turn-over': if (age < 2 * 3600000) status = 'idle'; break;
       case 'SessionStart': if (age < 2 * 3600000 && status !== 'working') status = 'idle'; break;
-      case 'SessionEnd': status = 'gone'; break;
+      // the launcher's own start says only that the agent's command began: what the transcript shows stands
+      case 'start': if (hook.kind !== 'launcher' && age < 2 * 3600000 && status !== 'working') status = 'idle'; break;
+      case 'SessionEnd': case 'ended': status = 'gone'; break;
       default: break;
     }
   }

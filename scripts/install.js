@@ -170,7 +170,7 @@ When a write starts a new board for your directory, the CLI says so: if that was
 - Never delete items the user created; mark them done or blocked instead.
 - If you stop working on something you claimed, \`release\` it so others can pick it up.
 - **Only use this CLI.** Never call the office's HTTP API (\`localhost:4777\` or \`OFFICE_PORT\`) or edit its files under
-  \`~/.claude/office/\` yourself, and never change \`CLAUDE_CODE_SESSION_ID\` or \`CLAUDE_OFFICE_RUN\` for it. The API is
+  \`~/.claude/office/\` yourself, and never change \`OFFICE_SESSION_ID\`, \`CLAUDE_CODE_SESSION_ID\` or \`CLAUDE_OFFICE_RUN\` for it. The API is
   the user's own controls: starting runs, approving checks and the Sequences setting are theirs to decide.
 
 ## Sequences: a chain of items, one fresh session each

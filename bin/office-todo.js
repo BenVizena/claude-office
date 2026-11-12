@@ -10,7 +10,8 @@ import { requestRun, runsOf } from '../server/chain.js';
 import { reviewBoard, gitResolver, suggestions, STALE_DAYS } from '../server/review.js';
 import { helpText, commandHelp, findCommand } from '../server/clihelp.js';
 import { sessionRunPolicy } from '../server/runpolicy.js';
-import { userOnly, startSequence, describeRuns, stopSequence, answerRequest, approveItemCheck, runItemCheck, settingsCommand, officeStatus } from '../server/usercli.js';
+import { userOnly, startSequence, describeRuns, stopSequence, answerRequest, approveItemCheck, runItemCheck, settingsCommand, officeStatus, agentFlag } from '../server/usercli.js';
+import { sessionFromEnv } from '../server/agents/index.js';
 import { setStatus, clearStatus, readStatus } from '../server/status.js';
 import {
   readBoard, listBoards, addItem, updateItem, removeItem, claimItem, releaseItem, children, GLOBAL_BOARD, addDetail, readDetails, retireDetail, liveDetails, moveItem, addDependency, removeDependency, setChain, openBlockers, claimIsStale, dependents, setCheck, markReviewed,
@@ -55,8 +56,10 @@ for (let i = 0; i < argv.length; i++) {
   } else pos.push(a);
 }
 
-const session = process.env.CLAUDE_CODE_SESSION_ID || null;
-const by = flags.by || process.env.OFFICE_TODO_BY || (session ? `claude ${session.slice(0, 8)}` : 'agent');
+// which agent session this runs in: the office's own variable (set for every session it starts), then each agent's
+// (CLAUDE_CODE_SESSION_ID, ...). None: the user's own terminal.
+const { session, agent: sessionAgent } = sessionFromEnv(process.env);
+const by = flags.by || process.env.OFFICE_TODO_BY || (session ? `${sessionAgent} ${session.slice(0, 8)}` : 'agent');
 
 function repoRoot(dir) {
   try {
@@ -504,11 +507,11 @@ ${d.text}`);
       if (policy.refuse) throw new Error(`can't start a sequence: ${policy.refuse}`);
       let here = process.cwd();
       try { here = execFileSync('git', ['rev-parse', '--show-toplevel'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { /* not a repo: the office refuses it */ }
-      const r = requestRun(slug, { root: id, worktree: here, max: flags.max, parallel: flags.parallel, by, bySession: session });
+      const r = requestRun(slug, { root: id, worktree: here, max: flags.max, parallel: flags.parallel, by, bySession: session, agent: agentFlag(flags.agent) });
       const b = readBoard(slug);
       const items = r.scope.map((x) => b.items.find((i) => i.id === x)).filter((i) => i && i.status !== 'done');
       if (flags.json) { print({ ...r, mode: policy.ask ? 'ask' : 'allowed' }); break; }
-      console.log(`sequence on "${r.rootText}": ${items.length} open item${items.length === 1 ? '' : 's'} in scope, up to ${r.max} session${r.max > 1 ? 's' : ''}`
+      console.log(`sequence on "${r.rootText}": ${items.length} open item${items.length === 1 ? '' : 's'} in scope, up to ${r.max} session${r.max > 1 ? 's' : ''}${flags.agent ? ` (${r.agent})` : ''}`
         + `${r.parallel > 1 ? `, ${r.parallel} at once (each in its own worktree and branch, merged into this worktree)` : ', one at a time'}, in ${here}`);
       console.log(tree(b, items));
       const unchecked = checksAuto() ? [] : items.filter((i) => !i.check?.approved);
