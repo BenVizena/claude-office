@@ -1,11 +1,12 @@
 // The terminal view of Claude Office: `npm run tui`. A viewer in its own process: it reads the office model from
 // ~/.claude/office/state.json (written by the office, headless or web, each time it rebuilds) and the boards from
-// their files, and draws the isometric office with the to-do board beside it. It never runs sequences and holds no
+// their files, and draws the isometric office with a side pane beside it: the to-do board, or the sessions (what each
+// is doing, how full its context is, whether it waits on you). Tab goes office -> board -> sessions. It never runs sequences and holds no
 // lock: closing it, or selecting text in its window, stalls nothing. The keys that change something (start, stop or
 // approve a sequence, approve or run a check) are the user's controls from server/usercli.js: plain file writes that
 // the running office picks up.
 //
-//   node tui/app.js [--once] [--size 120x40] [--no-color] [--no-board] [--focus <room>] [--demo]
+//   node tui/app.js [--once] [--size 120x40] [--no-color] [--no-board] [--sessions] [--focus <room>] [--demo]
 //   --once prints one frame and exits (also what happens when the output is not a terminal)
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,6 +21,7 @@ import * as usercli from '../server/usercli.js';
 import { render, plan, DETAILS, COLORS } from './render.js';
 import { clip, plainText } from './canvas.js';
 import { boardRows, boardPane, selectable, boardName, cells } from './board.js';
+import { sessionRows, sessionsPane, sessionName } from './sessions.js';
 
 /** From this many columns the board is shown beside the office; under it, `b` swaps the office for the board. */
 export const BOARD_MIN_COLS = 110;
@@ -57,10 +59,15 @@ const HELP = [
   ['d', 'detail: auto, small, medium, large'],
   ['c', 'colour on or off'],
   ['', ''],
+  ['Tab', 'move the keyboard: office, board, sessions (Shift+Tab goes back)'],
+  ['j  k', 'next, previous row in the board or the sessions (PgUp, PgDn, Home, End too)'],
+  ['', ''],
+  ['Sessions', ''],
+  ['w', 'show or hide the sessions: what each is doing, its context, whether it waits on you'],
+  ['Enter', 'show the selected session\'s room in the office'],
+  ['', ''],
   ['Board', ''],
   ['b', 'show or hide the board'],
-  ['Tab', 'move the keyboard between the office and the board'],
-  ['j  k', 'next, previous row (PgUp, PgDn, Home, End too)'],
   ['s', 'run the selected item in sequence; start a sequence a session asked for'],
   ['x', 'stop the selected sequence (again: stop now; once stopped: clear it); dismiss a request'],
   ['a  r', 'approve the selected item\'s check; run it now'],
@@ -85,8 +92,10 @@ export class App {
     };
     this.view = { zoom: 1, panX: 0, panY: 0, focus: o.focus ?? null, detail: undefined, color: o.color !== false };
     this.boardOpen = o.board === false ? false : null; // null: open when the terminal is wide enough
-    this.pane = 'office';                              // which pane the arrow keys go to
+    this.pane = 'office';                              // which pane the arrow keys go to: 'office' or 'side'
+    this.side = o.side === 'sessions' ? 'sessions' : 'board'; // what the side pane shows
     this.selected = null;                              // key of the selected board row
+    this.selectedSession = null;                       // id of the selected session
     this.message = null;                               // { text, error }
     this.prompt = null;                                // { text(), keys: { key: fn }, yes() }
     this.help = false;
@@ -116,10 +125,27 @@ export class App {
     const wide = cols >= BOARD_MIN_COLS;
     const show = this.boardOpen ?? wide;
     const body = rows >= 4 ? rows - 1 : rows; // the last row is the hint line
-    if (!show) return { cols, rows, body, office: cols, board: 0, pane: 'office' };
-    if (!wide) return { cols, rows, body, office: 0, board: cols, pane: 'board' };
+    // (board: the width of the side pane, whichever of the two it shows; pane: 'office', 'board' or 'sessions')
+    if (!show) return { cols, rows, body, office: cols, board: 0, pane: 'office', side: this.side };
+    if (!wide) return { cols, rows, body, office: 0, board: cols, pane: this.side, side: this.side };
     const board = Math.max(44, Math.min(72, Math.round(cols * 0.36)));
-    return { cols, rows, body, office: cols - board - 1, board, pane: this.pane };
+    return { cols, rows, body, office: cols - board - 1, board, pane: this.pane === 'office' ? 'office' : this.side, side: this.side };
+  }
+
+  /** The sessions the pane lists: the focused room's, or all of them. Keeps the selection on a row that exists. */
+  sessions() {
+    const f = this.view.focus;
+    const rows = sessionRows(this.state, { only: f && (this.state?.rooms || []).some((r) => r.key === f) ? f : null });
+    if (!rows.some((r) => r.key === this.selectedSession)) this.selectedSession = rows[0]?.key ?? null;
+    return rows;
+  }
+
+  sidePane(L) {
+    if (L.side === 'sessions') {
+      const room = (this.state?.rooms || []).find((r) => r.key === this.view.focus);
+      return sessionsPane(this.sessions(), L.board, L.body, { selected: this.selectedSession, color: this.view.color, active: L.pane === 'sessions', now: this.io.now(), room: room?.name });
+    }
+    return boardPane(this.rows(), L.board, L.body, this.paneOpts(L.pane === 'board'));
   }
 
   /** The board the pane shows: the focused room's, or null for all of them. */
@@ -157,8 +183,8 @@ export class App {
     if (this.help) lines = this.helpLines(cols, L.body);
     else {
       const office = L.office ? render(this.state, L.office, L.body, this.view) : null;
-      const board = L.board ? boardPane(this.rows(), L.board, L.body, this.paneOpts(L.pane === 'board')) : null;
-      const bar = color ? `\x1b[0;${L.pane === 'board' ? COLORS.dim : COLORS.wall}m│\x1b[0m` : '│';
+      const board = L.board ? this.sidePane(L) : null;
+      const bar = color ? `\x1b[0;${L.pane !== 'office' ? COLORS.dim : COLORS.wall}m│\x1b[0m` : '│';
       lines = office && board ? office.map((l, i) => l + bar + board[i]) : office || board;
     }
     if (L.body < rows) lines.push(this.hintLine(cols, L));
@@ -194,7 +220,9 @@ export class App {
     if (this.prompt) return cells([[' '], [this.prompt.text(), COLORS.room]], cols, { color });
     const note = clip(this.officeNote(), Math.max(0, cols - 2));
     const left = this.message ? [[' '], [this.message.text, this.message.error ? COLORS.ask : COLORS.name]]
-      : [[' '], [this.help ? 'any key closes this' : L.pane === 'board' ? '? help · q quit · Tab office · j/k select · b board' : `? help · q quit · +/- zoom · arrows move · n/p room · b board${L.board ? ' · Tab board' : ''}`, COLORS.dim]];
+      : [[' '], [this.help ? 'any key closes this' : L.pane === 'board' ? '? help · q quit · Tab sessions · j/k select · b board'
+        : L.pane === 'sessions' ? '? help · q quit · Tab office · j/k select · Enter its room · w sessions'
+        : '? help · q quit · +/- zoom · arrows move · n/p room · Tab board, sessions', COLORS.dim]];
     const room = cols - [...note].length - 2;
     const used = left.reduce((n, [t]) => n + [...t].length, 0);
     if (room < 12) return cells(left, cols, { color });
@@ -233,31 +261,63 @@ export class App {
       case 'escape': Object.assign(v, { zoom: 1, panX: 0, panY: 0, focus: null }); break;
       case 'left': case 'h': if (L.pane === 'office' || k === 'h') v.panX -= step(L.office / 8); break;
       case 'right': case 'l': if (L.pane === 'office' || k === 'l') v.panX += step(L.office / 8); break;
-      case 'up': if (L.pane === 'board') this.move(-1); else v.panY -= step(L.body / 8); break;
-      case 'down': if (L.pane === 'board') this.move(1); else v.panY += step(L.body / 8); break;
+      case 'up': if (L.pane !== 'office') this.move(-1); else v.panY -= step(L.body / 8); break;
+      case 'down': if (L.pane !== 'office') this.move(1); else v.panY += step(L.body / 8); break;
       case 'n': case ']': this.room(1); break;
       case 'p': case '[': this.room(-1); break;
       case 'd': v.detail = [undefined, ...DETAILS][([undefined, ...DETAILS].indexOf(v.detail) + 1) % (DETAILS.length + 1)]; this.say(`detail: ${v.detail || 'auto (by terminal size)'}`); break;
       case 'c': v.color = !v.color; break;
-      case 'b': this.boardOpen = !L.board; if (!this.boardOpen) this.pane = 'office'; break;
-      case 'tab': case 'shift-tab':
-        if (!L.board) { this.boardOpen = true; this.pane = 'board'; } else if (L.office) this.pane = L.pane === 'board' ? 'office' : 'board';
+      case 'b': this.show('board', !(L.board && L.side === 'board'), false); break;
+      case 'w': this.show('sessions', !(L.board && L.side === 'sessions'), false); break;
+      case 'tab': case 'shift-tab': {
+        // office -> board -> sessions -> office (a terminal too narrow for two panes shows one at a time)
+        const order = ['office', 'board', 'sessions'];
+        const next = order[(order.indexOf(L.pane) + (k === 'tab' ? 1 : 2)) % 3];
+        if (next === 'office') { this.pane = 'office'; if (!L.office) this.boardOpen = false; } else this.show(next, true);
         break;
+      }
       case 'j': this.move(1); break;
       case 'k': this.move(-1); break;
       case 'pagedown': this.move(Math.max(1, L.body - 8)); break;
       case 'pageup': this.move(-Math.max(1, L.body - 8)); break;
       case 'home': this.move(-Infinity); break;
       case 'end': this.move(Infinity); break;
-      case 's': case 'enter': case 'x': case 'a': case 'r': if (L.board) this.act(k); else if (k !== 'enter') this.say('open the board first (b)'); break;
+      case 's': case 'enter': case 'x': case 'a': case 'r':
+        if (L.board && L.side === 'sessions') { if (k === 'enter') this.showRoomOf(); else this.say('that key acts on the board (b, or Tab)'); }
+        else if (L.board) this.act(k); else if (k !== 'enter') this.say('open the board first (b)');
+        break;
       default: break;
     }
     return undefined;
   }
 
-  /** Move the board selection by n rows (opening the board if it is hidden). */
+  /** Show the board or the sessions in the side pane (keyboard: move the keys there too), or hide the side pane. */
+  show(side, on, keyboard = true) {
+    if (!on) { this.boardOpen = false; this.pane = 'office'; return; }
+    this.side = side;
+    this.boardOpen = true;
+    if (keyboard) this.pane = 'side';
+  }
+
+  /** Enter on a session: its room, in the office. */
+  showRoomOf() {
+    const r = this.sessions().find((x) => x.key === this.selectedSession);
+    if (!r) { this.say('no session is selected'); return; }
+    Object.assign(this.view, { focus: r.room.key, zoom: 1, panX: 0, panY: 0 });
+    this.selectedSession = r.key; // the list is now that room's: stay on the same session
+    this.say(`room: ${r.room.name || r.room.key} (${sessionName(r.session)})`);
+  }
+
+  /** Move the selection of the side pane by n rows (opening it if it is hidden). */
   move(n) {
     if (!this.layout().board) this.boardOpen = true;
+    if (this.side === 'sessions') {
+      const rows = this.sessions();
+      if (!rows.length) return;
+      const i = rows.findIndex((r) => r.key === this.selectedSession);
+      this.selectedSession = rows[Math.max(0, Math.min(rows.length - 1, (i < 0 ? 0 : i) + n))].key;
+      return;
+    }
     const can = selectable(this.rows());
     if (!can.length) return;
     const i = can.findIndex((r) => r.key === this.selected);
@@ -410,6 +470,7 @@ function parseArgs(argv) {
     else if (a === '--demo') o.demo = true;
     else if (a === '--no-color') o.color = false;
     else if (a === '--no-board') o.board = false;
+    else if (a === '--sessions') o.side = 'sessions';
     else if (a === '--focus') o.focus = argv[++i];
     else if (a === '--size') { const m = /^(\d+)x(\d+)$/.exec(argv[++i] || ''); if (!m) throw new Error('--size takes columns x rows, e.g. --size 120x40'); o.cols = Number(m[1]); o.rows = Number(m[2]); }
     else if (a === '--help' || a === '-h') o.help = true;
@@ -423,11 +484,11 @@ export async function main(argv = process.argv.slice(2), { stdin = process.stdin
   if (o.help) {
     stdout.write(`Claude Office in the terminal. Reads ${STATE_FILE}, written by the running office (npm run headless, or npm start).\n\n`
       + 'npm run tui [-- options]\n  --once          print one frame and exit (also when the output is not a terminal)\n  --size 120x40   the size of that frame\n'
-      + '  --no-color      plain text\n  --no-board      start with the board hidden\n  --focus <room>  start on one room (its key, e.g. lobby)\n  --demo          a made-up office instead of yours\n\n'
+      + '  --no-color      plain text\n  --no-board      start with the side pane hidden\n  --sessions      start with the sessions in the side pane, not the board\n  --focus <room>  start on one room (its key, e.g. lobby)\n  --demo          a made-up office instead of yours\n\n'
       + `Keys:\n${HELP.filter((h) => h[1]).map((h) => `  ${h[0].padEnd(8)}${h[1]}`).join('\n')}\n`);
     return;
   }
-  const opts = { focus: o.focus, board: o.board, color: o.color ?? !process.env.NO_COLOR };
+  const opts = { focus: o.focus, board: o.board, side: o.side, color: o.color ?? !process.env.NO_COLOR };
   if (o.demo) {
     const { demoState } = await import('../test/helpers/tui-state.js');
     const state = demoState();

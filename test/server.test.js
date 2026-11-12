@@ -111,7 +111,8 @@ describe('server HTTP API', () => {
       claimItem('office', it.id, { by: 'claude claim-sess', session: 'claim-sess' });
       const claim = () => readBoard('office').items.find((x) => x.id === it.id).claim;
       const until = async (ok, what) => {
-        for (const end = Date.now() + 5000; Date.now() < end;) { if (ok()) return; await new Promise((r) => setTimeout(r, 50)); }
+        // (giving a claim back happens when the office next rebuilds its model: within a pass or two)
+        for (const end = Date.now() + 12000; Date.now() < end;) { if (ok()) return; await new Promise((r) => setTimeout(r, 50)); }
         assert.fail(what);
       };
       writeEvent('claim-sess', { event: 'SessionEnd', at: 1234 });

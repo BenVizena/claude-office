@@ -75,8 +75,11 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
 
   function markDirty() { dirty = true; }
 
+  let missed = false; // a rebuild was asked for while one was under way
   async function rebuild() {
-    if (building) return;
+    // What changed while a rebuild is under way may be too late for it to see: build again when it is done, rather
+    // than leave the change for the next timed refresh.
+    if (building) { missed = true; return; }
     building = true;
     try {
       state = await buildOffice({ scanner, settings, hooks, decor, catalog, staff });
@@ -92,7 +95,10 @@ export function createOffice({ mode = 'headless', port, onState = () => {}, onEv
       onState(state);
     } catch (e) {
       console.error('rebuild failed:', e);
-    } finally { building = false; }
+    } finally {
+      building = false;
+      if (missed) { missed = false; dirty = true; }
+    }
   }
 
   /** News waiting for each session (unblocked, finished, claim taken over): shown as a badge at its desk. */

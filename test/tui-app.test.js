@@ -13,6 +13,7 @@ import { requestRun, runsOf } from '../server/chain.js';
 import { STATE_FILE } from '../server/snapshot.js';
 import { App, run, parseKeys, BOARD_MIN_COLS, TUI_FILE } from '../tui/app.js';
 import { boardRows, boardPane, selectable, wrap } from '../tui/board.js';
+import { sessionRows, sessionsPane, contextOf, doingOf, askOf, waitsOnYou } from '../tui/sessions.js';
 import { stripColor } from '../tui/canvas.js';
 import { demoState } from './helpers/tui-state.js';
 
@@ -190,7 +191,8 @@ describe('app', () => {
     assert.equal(app.selected, 'p:item:i2');
     keys(app, 'up');
     assert.equal(app.selected, 'p:item:i1');
-    keys(app, 'tab', 'k', 'home', 'end');
+    keys(app, 'shift-tab', 'k', 'home', 'end');
+    assert.equal(app.layout().pane, 'office');
     assert.equal(app.selected, 'p:item:i2', 'j, k, Home and End work from either pane');
   });
 
@@ -428,5 +430,107 @@ describe('the terminal', () => {
       assert.equal(bad.status, 1);
       assert.match(bad.stderr, /--size takes columns x rows/);
     } finally { fs.rmSync(STATE_FILE, { force: true }); }
+  });
+});
+
+describe('sessions pane', () => {
+  const pane = (app, cols = 140, rows = 40) => app.frame(cols, rows).map(stripColor).map((l) => { const c = [...l]; return c.slice(c.indexOf('│') + 1).join(''); }).join('\n');
+
+  test('lists every session that is not gone: those waiting on you first, then by status and how recently active', () => {
+    const rows = sessionRows(demoState());
+    assert.equal(rows.some((r) => r.session.title === 'Old spike'), false, 'a session that is gone is left out');
+    assert.equal(rows[0].session.title, 'Rate limiter rewrite');
+    assert.equal(rows[0].waits, true);
+    const order = rows.map((r) => r.session.status);
+    assert.deepEqual([...new Set(order)], ['needs_you', 'working', 'compacting', 'idle', 'away']);
+    assert.deepEqual(sessionRows(demoState(), { only: 'docs-site-4d5e6f' }).map((r) => r.session.title), ['Rewrite the quickstart']);
+  });
+
+  test('says what a session is doing, how full its context is, and what it waits on you for', () => {
+    const s = (extra) => ({ id: 'x', status: 'working', ...extra });
+    assert.deepEqual(contextOf(s({ contextTokens: 415147, contextWindow: 1000000, contextPct: 0.415147 })), { pct: 0.415147, text: '415k of 1M (42%)' });
+    assert.deepEqual(contextOf(s({ contextPct: 0.3 })), { pct: 0.3, text: '30%' });
+    assert.deepEqual(contextOf(s({ contextTokens: 52000, contextWindow: 200000 })), { pct: 0.26, text: '52k of 200k (26%)' });
+    assert.equal(contextOf(s({})).text, 'not known');
+    // its own words come first; without any, what it was last seen doing
+    assert.equal(doingOf(s({ agentStatus: { text: 'Profiling the broadphase' }, lastTool: 'Bash' })), 'Profiling the broadphase');
+    assert.equal(doingOf(s({ lastTool: 'Bash', lastToolDetail: 'Run the tests' })), 'Bash: Run the tests');
+    assert.equal(doingOf(s({ status: 'idle', lastAssistantText: 'All done.' })), 'All done.');
+    // waiting on you: a question it asked, or a permission prompt
+    const asks = s({ status: 'needs_you', statusDetail: 'Drop the old cache, or migrate it?', agentStatus: { text: 'Blocked on the cache question', needsYou: 'Drop the old cache, or migrate it?' } });
+    assert.deepEqual([waitsOnYou(asks), askOf(asks), doingOf(asks)], [true, 'Drop the old cache, or migrate it?', 'Drop the old cache, or migrate it?']);
+    assert.equal(askOf(s({ status: 'needs_you', statusDetail: 'wants to use Bash' })), 'wants to use Bash');
+    assert.deepEqual([waitsOnYou(s({})), askOf(s({}))], [false, null]);
+  });
+
+  test('draws exactly its size, with the selected session in full underneath', () => {
+    const rows = sessionRows(demoState());
+    for (const [c, h] of [[54, 39], [44, 12], [120, 30], [20, 3], [30, 1]]) {
+      const lines = sessionsPane(rows, c, h, { selected: rows[0].key, now: 1000 });
+      assert.equal(lines.length, h);
+      for (const l of lines) assert.equal(width(l), c, `${c}x${h}`);
+    }
+    const out = sessionsPane(rows, 60, 39, { selected: rows[0].key, now: 1000, color: false }).join('\n');
+    assert.match(out, /^ Sessions · 1 needs you · 9 working · 1 compacting · 5 idle/);
+    assert.match(sessionsPane(rows, 90, 5, { color: false })[0], /^ Sessions · 1 needs you · 9 working · 1 compacting · 5 idle · 1 away +$/);
+    assert.match(out, />! Rate limiter rewr… +30% +Drop the old cache, or migrate/);
+    assert.match(out, /waits on you: Drop the old cache, or migrate it\?/);
+    assert.match(out, /says: Blocked on the cache question/);
+    assert.match(out, /context 30% +▰+▱+/);
+    assert.match(out, /claude · api-server +\n/);
+    assert.match(sessionsPane(rows, 60, 39, { selected: rows.find((r) => r.session.agent === 'pi').key, now: 1000, color: false }).join('\n'), /pi · api-server \/ feature\/billing · background +\n/);
+    assert.match(sessionsPane([], 40, 5, { color: false })[0], /^ Sessions · none here/);
+  });
+
+  test('Tab goes office, board, sessions and round again; Shift+Tab the other way', () => {
+    const app = demoApp({ readBoards: () => [] });
+    const where = () => { const L = app.layout(140, 40); return [L.pane, L.side]; };
+    assert.deepEqual(where(), ['office', 'board']);
+    app.key('tab'); assert.deepEqual(where(), ['board', 'board']);
+    app.key('tab'); assert.deepEqual(where(), ['sessions', 'sessions']);
+    assert.match(pane(app), /^ Sessions · 1 needs you/);
+    assert.match(text(app).split('\n').at(-1), /Tab office · j\/k select · Enter its room/);
+    app.key('tab'); assert.deepEqual(where(), ['office', 'sessions'], 'the sessions stay in view beside the office');
+    app.key('shift-tab'); assert.deepEqual(where(), ['sessions', 'sessions']);
+    app.key('shift-tab'); assert.deepEqual(where(), ['board', 'board']);
+    app.key('shift-tab'); assert.deepEqual(where(), ['office', 'board']);
+  });
+
+  test('in a narrow terminal the panes take turns', () => {
+    const app = demoApp({ readBoards: () => [] });
+    const where = () => { const L = app.layout(80, 24); return [L.pane, L.office > 0, L.board > 0]; };
+    app.frame(80, 24);
+    assert.deepEqual(where(), ['office', true, false]);
+    app.key('tab'); assert.deepEqual(where(), ['board', false, true]);
+    app.key('tab'); assert.deepEqual(where(), ['sessions', false, true]);
+    assert.match(stripColor(app.frame(80, 24)[0]), /^ Sessions · 1 needs you/);
+    app.key('tab'); assert.deepEqual(where(), ['office', true, false]);
+  });
+
+  test('j, k and the arrows move the selection; Enter shows the session\'s room; w shows and hides the pane', () => {
+    const app = demoApp({ readBoards: () => [] });
+    app.frame(140, 40);
+    keys(app, 'tab', 'tab');
+    const first = app.sessions()[0];
+    assert.equal(app.selectedSession, first.key);
+    keys(app, 'j', 'down');
+    assert.equal(app.selectedSession, app.sessions()[2].key);
+    keys(app, 'k', 'end');
+    const last = app.sessions().at(-1);
+    assert.equal(app.selectedSession, last.key);
+    assert.equal(last.session.title, 'Rewrite the quickstart');
+    app.key('enter');
+    assert.equal(app.view.focus, 'docs-site-4d5e6f');
+    assert.match(pane(app), /^ Sessions in docs-site · 1 away/, 'the list is now that room\'s');
+    assert.equal(app.selectedSession, last.key);
+    app.key('s');
+    assert.match(text(app).split('\n').at(-1), /acts on the board/);
+    app.key('escape');
+    app.key('w');
+    assert.equal(app.layout(140, 40).board, 0, 'w hides the sessions');
+    app.key('w');
+    assert.deepEqual([app.layout(140, 40).side, app.layout(140, 40).board > 0], ['sessions', true]);
+    app.key('b');
+    assert.equal(app.layout(140, 40).side, 'board', 'b swaps the board in');
   });
 });

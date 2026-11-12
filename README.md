@@ -83,8 +83,8 @@ Claude Code: [Pi](https://pi.dev) is built in, and any other coding agent can be
   boundary. The web office's API can't tell its own page from any other program on your machine, so a session that
   runs `curl` or a script against it could start a run, approve a check or edit the board files, whatever the
   setting says. The headless office has no API, but the same controls exist as `office-todo` commands, which
-  refuse to run inside a session only because of environment variables a session could change, and the boards and
-  settings are plain files. The skill tells sessions never to do any of that. Keep reviewing shell commands as usual.
+  refuse to run inside a session, or with nothing typing on their input, only because of environment variables and
+  a terminal check that a session could get around, and the boards and settings are plain files. The skill tells sessions never to do any of that. Keep reviewing shell commands as usual.
 - **Results.** Sessions can post charts, tables, images and short notes (test runs, benchmarks, training metrics)
   with `office-todo results …`, partial results included. A small screen with a live sparkline goes up on the
   agent's desk and a "📊 View results" tab sits above its speech bubble; click either to open the results window.
@@ -373,7 +373,10 @@ office-todo help [<command>]
 ```
 
 These are yours: the CLI refuses them inside an agent's session, where `run` only *asks* for a sequence, as the
-*Sequences* setting (`sessionRuns`) allows.
+*Sequences* setting (`sessionRuns`) allows. It also refuses them when nothing is typing on the command's input, as
+when an agent the office knows no session variable for, or a script, runs it: having no session is not proof of
+being you. For your own scripts or scheduled jobs, set `OFFICE_TODO_USER=1` there yourself. A check you set is
+approved as you type it under the same rule; one set any other way waits for `approve`.
 
 ### The terminal view
 
@@ -382,8 +385,13 @@ npm run tui
 ```
 
 An isometric wireframe of the office drawn with braille dots: rooms are projects, the figures at the desks are
-sessions with their speech bubbles, and a pane on the right holds the to-do board. It scales with the terminal, from a
-schematic at 40×12 to full detail on a large one, and you can zoom and pan.
+sessions with their speech bubbles, and a pane on the right holds the to-do board or the sessions. It scales with the
+terminal, from a schematic at 40×12 to full detail on a large one, and you can zoom and pan.
+
+The **sessions pane** (`Tab` twice, or `w`) lists every session that is not gone, those waiting on you first: what
+each is doing (its own status line, else its last tool), how full its context is, and what it is waiting on you for
+(a question it asked, or a permission prompt). The selected one is shown in full underneath: agent and model, room
+and branch, context in tokens, what it last said, the items it holds. `Enter` shows its room in the office.
 
 It is **only a viewer**, a separate process that reads `state.json` and the board files. Closing it, or selecting
 text in it, never stalls the office or a sequence. It works with either office, and the board pane (and its keys)
@@ -397,9 +405,11 @@ works even when no office is running; the bottom line then says so.
 | `Esc` `0` | the whole office again; `0` also resets zoom and position |
 | `d` | detail: auto, small, medium, large |
 | `c` | colour on or off |
+| `Tab` (`Shift+Tab`) | move the keyboard: office, board, sessions (and back) |
 | `b` | show or hide the board |
-| `Tab` | move the keyboard between the office and the board |
-| `j` `k` (PgUp, PgDn, Home, End) | next, previous board row |
+| `w` | show or hide the sessions |
+| `j` `k` (PgUp, PgDn, Home, End) | next, previous row in the board or the sessions |
+| `Enter` | in the sessions: show the selected session's room |
 | `s` | run the selected item in sequence (`+` / `-` in the prompt change the session cap); start a sequence a session asked for |
 | `x` | stop the selected sequence (again: stop now; once stopped: clear it); dismiss a request |
 | `a` `r` | approve the selected item's check; run it now |
@@ -410,13 +420,13 @@ The board keys always ask `y` / `n` first. `s` starts a sequence one item at a t
 parallel runs and `--agent` stay with `office-todo run`. Like the commands above, they are refused when the view
 is started inside an agent's session.
 
-From 110 columns the board sits to the right of the office; in a narrower terminal `b` swaps the office for the
-board. With no room focused the pane lists every board that has something open; focus a room (`n` / `p`) to see
+From 110 columns the side pane sits to the right of the office; in a narrower terminal the panes take turns (`Tab`,
+or `b` / `w`). With a room focused the sessions pane lists that room's sessions. With no room focused the pane lists every board that has something open; focus a room (`n` / `p`) to see
 that room's board, or the lobby for the office-wide one.
 
 Options (`npm run tui -- <option>`): `--once` prints one frame and exits (also what happens when the output is not a
 terminal, so it can be piped), `--size 120x40` sets that frame's size, `--no-color` (`NO_COLOR` is honoured too),
-`--no-board`, `--focus <room>`, `--demo` shows a made-up office instead of yours, `--help`.
+`--no-board`, `--sessions` (start with the sessions in the side pane), `--focus <room>`, `--demo` shows a made-up office instead of yours, `--help`.
 
 It uses the alternate screen and restores the terminal on quit, Ctrl+C, signals and crashes, and it runs inside tmux.
 
