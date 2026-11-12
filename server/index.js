@@ -9,6 +9,8 @@ import { IMAGE_TYPES } from './results.js';
 import { quietConsole, consoleCanBlock, LOG_FILE } from './log.js';
 
 const office = createOffice({
+  mode: 'web',
+  port: PORT,
   onState: (state) => broadcast({ type: 'state', state }),
   onEvent: (e) => broadcast({ type: 'event', ...e }),
 });

@@ -13,6 +13,8 @@ import { SETTINGS_FILE } from '../server/config.js';
 import { readBoard, addItem, claimItem } from '../server/todos.js';
 import { LOG_FILE } from '../server/log.js';
 import { writeEvent } from '../server/events.js';
+import { runningOffice } from '../server/instance.js';
+import { readSnapshot } from '../server/snapshot.js';
 
 const SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server', 'index.js');
 
@@ -156,6 +158,9 @@ describe('server HTTP API', () => {
       assert.equal(st.rooms[0].key, 'lobby');
       assert.equal(st.settings.sessionRuns, 'ask');
       assert.ok(Array.isArray(st.todoBoards));
+      // the web office holds the same lock and writes the same snapshot as the headless one (which reports no handles)
+      assert.deepEqual([runningOffice()?.mode, runningOffice()?.port, runningOffice()?.pid], ['web', port, child.pid]);
+      assert.ok(readSnapshot().network.includes('TCPServerWrap'), 'its listening port shows up in the snapshot');
       const u = await request('GET', '/api/usage');
       assert.equal(u.status, 200);
       assert.equal(u.body.days.length, 14);
@@ -243,16 +248,17 @@ describe('server HTTP API', () => {
       assert.match(fs.readFileSync(LOG_FILE, 'utf8'), /^\d{4}-\d\d-\d\dT[\d:.]+Z Claude Office is open at http:\/\/localhost:\d+$/m);
     });
 
-    test('a second server on the same port says so and exits, and the first keeps running', async () => {
+    test('a second office says one is already running and exits, and the first keeps running', async () => {
       const second = spawn(process.execPath, [SERVER], { env: childEnv({ OFFICE_PORT: String(port) }), cwd: TEST_HOME });
       let out = '';
       second.stdout.on('data', (c) => { out += c; });
       second.stderr.on('data', (c) => { out += c; });
       const code = await new Promise((resolve) => second.on('close', resolve));
       assert.equal(code, 1);
-      assert.match(out, new RegExp(`Port ${port} is already in use`));
+      const said = `already running (the web office at http://localhost:${port}, process ${child.pid})`;
+      assert.ok(out.includes(said), out);
       assert.doesNotMatch(out, /\n\s+at /, 'a plain message, not a stack trace');
-      assert.match(fs.readFileSync(LOG_FILE, 'utf8'), new RegExp(`Port ${port} is already in use`));
+      assert.ok(fs.readFileSync(LOG_FILE, 'utf8').includes(said), 'and it is in the log');
       assert.equal((await request('GET', '/api/state')).status, 200);
     });
   });

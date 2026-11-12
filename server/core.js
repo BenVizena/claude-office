@@ -20,14 +20,30 @@ import { computeUsage } from './usage.js';
 import { useNonBlockingLocks, whenUnlocked } from './lock.js';
 import { listRuns, runSummary, loadRun, imagePath, removeRun } from './results.js';
 import { startLog } from './log.js';
+import { takeInstanceLock, OfficeRunning } from './instance.js';
+import { writeSnapshot } from './snapshot.js';
 
 /**
  * Sets the office up (log file, crash handlers, settings, scanner) and returns it. Nothing is watched until start().
+ * mode says which front end runs it ('web' with its port, or 'headless'). Only one office runs at a time: if another
+ * holds the lock (see instance.js) this says so and ends the process.
  * onState(state) is called with each new office model; onEvent({ event, sessionId, message }) with each session
- * event worth telling a viewer about at once.
+ * event worth telling a viewer about at once. Each model is also written to the state snapshot file (snapshot.js).
  */
-export function createOffice({ onState = () => {}, onEvent = () => {} } = {}) {
+export function createOffice({ mode = 'headless', port, onState = () => {}, onEvent = () => {} } = {}) {
   startLog(); // everything printed from here on is also kept in the log file
+  try {
+    takeInstanceLock({ mode, ...(port ? { port } : {}) }, { onLost: () => {
+      console.error('Another office took over while this one was not responding: stopping, so sequences are not run twice.');
+      process.exit(1);
+    } });
+  } catch (e) {
+    if (!(e instanceof OfficeRunning)) throw e;
+    console.error(e.message);
+    process.exit(1);
+  }
+  // stop through process.exit so the lock is released (a killed office leaves it; a dead holder's lock is taken over)
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process.exit(0));
   // An error nothing caught: Node would print it straight to the console (which can block, see log.js) and exit.
   // Put it in the log first. A failed promise is logged and the office carries on; after an uncaught exception the
   // process may be in a bad state, so it stops, as Node would have.
@@ -58,11 +74,13 @@ export function createOffice({ onState = () => {}, onEvent = () => {} } = {}) {
     try {
       state = await buildOffice({ scanner, settings, hooks, decor, catalog, staff });
       const boards = listBoards();
+      settleClaims(boards);
       state.todoBoards = boards.map((bd) => ({ id: bd.id, name: bd.name, items: bd.items, runs: runsOf(bd), maxRuns: MAX_RUNS, runRequest: bd.runRequest || null }));
       state.checksRunning = [...checksRunning];
       attachNews(state, boards);
       state.settings = { soundHint: true, showBackgroundSessions: settings.showBackgroundSessions, blender: !!resolveBlender(settings),
         sessionRuns: settings.sessionRuns, sessionRunDailyCap: settings.sessionRunDailyCap, launchPermissionMode: settings.launchPermissionMode || '', autoApproveChecks: !!settings.autoApproveChecks, mergeStyle: settings.mergeStyle || 'merge', closeFinishedSteps: settings.closeFinishedSteps !== false };
+      writeSnapshot(state, mode);
       onState(state);
     } catch (e) {
       console.error('rebuild failed:', e);
@@ -152,20 +170,33 @@ export function createOffice({ onState = () => {}, onEvent = () => {} } = {}) {
 
   // ---- session events (the files a session's hook writes, see events.js) ----
   const events = new EventReader();
-  const alive = new Set(); // sessions whose claims we have marked as their own since their last start
   const markClaims = (session, ended) => whenUnlocked(() => markSessionClaims(session, ended))
     .then((n) => { if (n) markDirty(); })
     .catch((e) => console.error('claim update failed:', e.message));
 
-  /** Events from before the office started: where each session stands, and claims of sessions that ended meanwhile. */
+  /** Events from before the office started: where each session stands (the next rebuild settles their claims). */
   function loadEvents() {
-    const past = events.changes();
-    for (const { session, hook } of past) hooks.set(session, hook);
-    const ended = new Map(past.filter((p) => p.hook.event === 'SessionEnd').map((p) => [p.session, p.hook.at]));
-    if (!ended.size) return;
-    const holding = new Set();
-    for (const bd of listBoards()) for (const it of bd.items) if (it.claim && !it.claim.ended && it.status !== 'done' && ended.has(it.claim.session)) holding.add(it.claim.session);
-    for (const session of holding) markClaims(session, ended.get(session));
+    for (const { session, hook } of events.changes()) hooks.set(session, hook);
+  }
+
+  /**
+   * Claims follow the session's life: ended -> anyone may take them over; back (a resume) or started (a ▶ launch) ->
+   * they're its own again. takeEvents does this as each event arrives; this settles whatever that missed (an event
+   * from while the office was down, one overwritten by the next before we read it, a board that was busy), from
+   * where each session stands now.
+   */
+  function settleClaims(boards) {
+    const todo = new Map(); // session -> ended at, or null for "its own again"
+    for (const bd of boards) {
+      for (const it of bd.items) {
+        const c = it.claim;
+        const h = c && it.status !== 'done' && hooks.get(c.session);
+        if (!h) continue;
+        if (h.event === 'SessionEnd') { if (!c.ended) todo.set(c.session, h.at); }
+        else if ((c.ended && h.at > c.ended) || c.pending) todo.set(c.session, null);
+      }
+    }
+    for (const [session, ended] of todo) markClaims(session, ended);
   }
 
   /** Takes in the events written since the last look. */
@@ -173,25 +204,23 @@ export function createOffice({ onState = () => {}, onEvent = () => {} } = {}) {
     let nudge = false;
     for (const { session, hook } of events.changes()) {
       hooks.set(session, hook);
-      const ev = hook.event;
-      if (['SessionStart', 'Stop', 'SessionEnd', 'UserPromptSubmit', 'Notification', 'PreCompact', 'PermissionRequest'].includes(ev)) {
-        scanner.scan();
-        onEvent({ event: ev, sessionId: session, message: hook.message || null });
-      }
-      // claims follow the session's life: ended -> anyone may take them over; back (resume) or started (a ▶ launch) ->
-      // they're its own again. Only a session's last event is kept, so any sign of life counts when we haven't
-      // seen one since it started.
-      if (ev === 'SessionEnd') {
-        alive.delete(session);
-        markClaims(session, hook.at);
-        // its news file stays for a resume; just note that it ended
-        whenUnlocked(() => markNewsEnded(session)).catch((e) => console.error('news end failed:', e.message));
-      } else if (ev === 'SessionStart' || ev === 'UserPromptSubmit' || !alive.has(session)) {
-        alive.add(session);
-        markClaims(session, null);
-      }
-      if (ev === 'Stop' || ev === 'SessionEnd') nudge = true;
       markDirty();
+      const ev = hook.event;
+      if (ev === 'Stop' || ev === 'SessionEnd') nudge = true;
+      // one event that can't be handled (a transcript that vanished mid-scan, say) must not lose the ones after it
+      try {
+        if (['SessionStart', 'Stop', 'SessionEnd', 'UserPromptSubmit', 'Notification', 'PreCompact', 'PermissionRequest'].includes(ev)) {
+          scanner.scan();
+          onEvent({ event: ev, sessionId: session, message: hook.message || null });
+        }
+        if (ev === 'SessionEnd') {
+          markClaims(session, hook.at);
+          // its news file stays for a resume; just note that it ended
+          whenUnlocked(() => markNewsEnded(session)).catch((e) => console.error('news end failed:', e.message));
+        } else if (ev === 'SessionStart' || ev === 'UserPromptSubmit') markClaims(session, null);
+      } catch (e) {
+        console.error(`handling ${ev} of session ${session} failed:`, e);
+      }
     }
     if (nudge && state) setTimeout(runSequences, 500); // a sequence step may be able to move on
   }

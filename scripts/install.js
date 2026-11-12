@@ -6,9 +6,9 @@
 //   node scripts/install.js uninstall  # remove both
 import fs from 'node:fs';
 import path from 'node:path';
-import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { CLAUDE_DIR, REPO_DIR, HOOK_SRC, HOOK_FILE, HOOK_REPO_FILE, writeHookRepo, PORT, loadSettings, resolveBlender } from '../server/config.js';
+import { runningOffice } from '../server/instance.js';
 
 const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
 // The hook only imports Node's own modules up front, so it's copied out of the repo: moving or deleting the clone
@@ -276,14 +276,6 @@ ${T} results list | rm "<chart>" | clear | help
   console.log(`Skill installed at ${SKILL_DIR}`);
 }
 
-function serverUp() {
-  return new Promise((resolve) => {
-    const req = http.get({ host: '127.0.0.1', port: PORT, path: '/', timeout: 1500 }, (res) => { res.resume(); resolve(res.statusCode === 200); });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
-  });
-}
-
 function version(cmd, args) {
   try { return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], shell: process.platform === 'win32' }).trim().split('\n')[0]; } catch { return null; }
 }
@@ -302,6 +294,7 @@ async function status() {
   const claude = settings.claudePath;
   const claudeOk = path.isAbsolute(claude) ? fs.existsSync(claude) : !!version(claude, ['--version']);
   const blender = resolveBlender(settings);
+  const office = runningOffice(); // the lock every office holds (web or headless): no need to knock on a port
   const lines = [
     [nodeMajor >= 22, `Node.js ${process.versions.node}${nodeMajor >= 22 ? '' : ' (need 22 or newer)'}`],
     [!!git, git || 'git not found on PATH'],
@@ -311,7 +304,9 @@ async function status() {
       : `hooks run ${hookNode}, which no longer exists (Node moved or upgraded): run npm run setup again`],
     [fs.existsSync(path.join(SKILL_DIR, 'SKILL.md')), `office-todo skill in ${SKILL_DIR}`],
     [blender ? true : 'optional', blender ? `Blender: ${blender}` : 'Blender not installed (only needed to model new furniture)'],
-    [await serverUp() ? true : 'optional', `office server on http://localhost:${PORT}`],
+    [office ? true : 'optional', office
+      ? `office running ${office.mode === 'web' ? `at http://localhost:${office.port}` : 'headless (no open ports)'}, process ${office.pid}`
+      : `office not running (npm run open for the web office at http://localhost:${PORT}, or npm run headless)`],
   ];
   for (const [ok, text] of lines) console.log(`${ok === true ? 'OK      ' : ok === 'optional' ? 'OPTIONAL' : 'MISSING '} ${text}`);
   return lines.every(([ok]) => ok);
