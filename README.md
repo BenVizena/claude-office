@@ -434,6 +434,29 @@ the `office-todo` CLI end to end, and the hook. Each test file points the home d
 (`test/helpers/home.js`) and deletes it afterwards, so tests never touch your real `~/.claude` data, and they don't
 need the office to be running.
 
+### Live tests with Pi and a local model
+
+`test/live-pi.test.js` runs a real [Pi](https://pi.dev) on a local model and checks the office against it: a Pi turn
+writes its events in order, `office-todo status` and `claim` run by Pi land under its session id, the office reads
+the same tokens and context that Pi recorded, and a two-item sequence runs through the headless office from start to
+finish with each step a background Pi session. It is skipped (saying why) unless you ask for it and have what it needs:
+
+- the `pi` command on your PATH (`npm i -g @earendil-works/pi-coding-agent`),
+- [Ollama](https://ollama.com) answering on `localhost:11434` with the model `qwen2.5:7b` (`ollama pull qwen2.5:7b`).
+
+```bash
+OFFICE_LIVE_PI=1 node --test test/live-pi.test.js
+```
+
+In PowerShell: `$env:OFFICE_LIVE_PI = '1'; node --test test/live-pi.test.js`. Run them on their own like this:
+`OFFICE_LIVE_PI=1 npm test` includes them too, but the model then competes for the processor with the rest of the
+suite, and tests that time things can fail.
+
+They take from half a minute to several minutes, depending on whether the model is already loaded. Like the rest of
+the suite they work in a temporary home: Pi gets its own settings folder there (pointing at Ollama, with the office's
+extension and skill), so your real `~/.pi` and `~/.claude` are not read or changed. The model is a small one and can
+still get a step wrong; a failed sequence prints its log and what each step's session said.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
