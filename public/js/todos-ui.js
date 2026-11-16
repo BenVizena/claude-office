@@ -49,11 +49,12 @@ function itemRow(it, board, v, sessions, depth) {
           ${ch.length ? `<span class="td-prog" title="${done} of ${ch.length} subtasks done"><span style="width:${(done / ch.length) * 100}%"></span></span><span class="sub">${done}/${ch.length}</span>` : ''}
           ${it.details ? `<button class="td-link" data-todo-toggle="${it.id}">📎 ${it.details} background</button>` : ''}
           ${it.note ? `<span class="sub">· ${esc(it.note)}</span>` : ''}
+          ${it.model && it.status !== 'done' ? `<span class="chip" title="A session the office starts on this item (a sequence step, or ▶) runs on this model">🧠 ${esc(it.model)}</span>` : ''}
           ${checkChip(it, board, v)}
         </div>
       </div>
       <div class="td-actions">
-        <button title="Edit title, summary and priority" data-todo-edit="${it.id}">✎</button>
+        <button title="Edit title, summary, check, model and priority" data-todo-edit="${it.id}">✎</button>
         <button title="Add a subtask" data-todo-sub="${it.id}">＋</button>
         ${v.pods?.length && it.status !== 'done' && (!it.claim || it.claim.ended) ? `<button title="Start a new Claude session on this (opens a terminal window)" data-todo-start="${it.id}">▶</button>` : ''}
         ${it.claim ? `<button title="Release the claim" data-todo-release="${it.id}">🔓</button>` : (it.status !== 'done' ? `<button title="Claim it yourself" data-todo-claim="${it.id}">✋</button>` : '')}
@@ -206,6 +207,7 @@ function editRow(it, depth) {
         <input type="text" data-keep="edit-check-${it.id}" data-edit-for="${it.id}" data-field="check" value="${esc(it.check?.cmd || '')}" maxlength="500" placeholder="Check command that proves it is done, e.g. npm test (optional)" class="mono" />
         <div class="td-edit-row">
           <label class="sub">Priority <select data-edit-for="${it.id}" data-field="priority" data-keep="edit-priority-${it.id}">${['low', 'normal', 'high'].map((p) => `<option value="${p}" ${p === (it.priority || 'normal') ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
+          <label class="sub" title="The model a session the office starts on this item uses (a sequence step, or ▶): what the agent's own --model takes, such as opus, sonnet or a full model id. Leave it empty to start the agent as it is set up.">Model <input type="text" data-keep="edit-model-${it.id}" data-edit-for="${it.id}" data-field="model" value="${esc(it.model || '')}" maxlength="120" placeholder="as set up" class="mono td-edit-model" /></label>
           <span class="spacer"></span>
           <button class="ghost" data-todo-cancel="${it.id}">Cancel</button>
           <button class="primary" data-todo-save="${it.id}">Save</button>

@@ -131,6 +131,7 @@ function line(it, board, indent = '') {
   const pri = it.priority && it.priority !== 'normal' ? ` [${it.priority}]` : '';
   const claim = it.claim ? `  ← claimed by ${it.claim.session === session && session ? 'you' : it.claim.by}${it.claim.ended ? ' (session ended — free to take over)' : it.claim.pending ? (claimIsStale(it.claim) ? ' (its session never started — free to take over)' : ' (session starting…)') : ''}` : '';
   const note = (it.summary ? `\n${indent}      ${it.summary}` : '') + (it.note ? `\n${indent}      note: ${it.note}` : '')
+    + (it.model && it.status !== 'done' ? `\n${indent}      model: ${it.model} (for a session the office starts on it)` : '')
     + (it.check ? `\n${indent}      check: ${it.check.cmd}${unapprovedNote(it.check, ' (not approved by the user yet)')}${it.check.last ? ` — last run ${it.check.last.ok ? 'passed' : 'FAILED'}` : ''}` : '')
     + (it.launch?.log && it.status !== 'done' ? `\n${indent}      background step log: ${it.launch.log}` : '');
   const waits = board.items?.length ? openBlockers(board, it) : [];
@@ -374,7 +375,7 @@ try {
     }
     case 'add': {
       newBoardNote(slug, meta, explicit);
-      const r = addItem(slug, meta, { text: rest.join(' '), by, session, priority: flags.priority || 'normal', parent: flags.parent, summary: flags.summary });
+      const r = addItem(slug, meta, { text: rest.join(' '), by, session, priority: flags.priority || 'normal', parent: flags.parent, summary: flags.summary, model: flags.model });
       follow(slug, r.id, 'created');
       print(r);
       break;
@@ -385,7 +386,8 @@ try {
       if (flags.text !== undefined) patch.text = flags.text;
       if (flags.priority !== undefined) patch.priority = flags.priority;
       if (flags.summary !== undefined) patch.summary = flags.summary;
-      if (Object.keys(patch).length === 2) throw new Error('usage: office-todo edit <id> [--text "..."] [--priority low|normal|high] [--summary "..."]');
+      if ('model' in flags) patch.model = flags.model ?? ''; // (--model as the last word: no model)
+      if (Object.keys(patch).length === 2) throw new Error('usage: office-todo edit <id> [--text "..."] [--priority low|normal|high] [--summary "..."] [--model <model> | --model ""]');
       print(updateItem(slug, id, patch), readBoard(slug));
       break;
     }

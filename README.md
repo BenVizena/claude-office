@@ -440,6 +440,13 @@ Sessions you start yourself show up in the office whatever started them, as long
   `office-todo settings defaultAgent pi`
 - One sequence can use another: `office-todo run <id> --agent pi` (also on `request start`). The agent is stored
   with the sequence, so changing the default later doesn't change a running one.
+- One item can name its **model**: `office-todo edit <id> --model opus` (or `add "..." --model haiku`, or the Model
+  box when you edit an item on the board). The session the office starts on that item, as a sequence step or with
+  ▶, then runs on that model, so one sequence can plan on a large model and do its renames on a small one. The
+  name is whatever the agent's own `--model` takes: for Claude Code an alias (`opus`, `sonnet`, `haiku`) or a full
+  model id, for Pi a pattern such as `ollama/qwen2.5:7b` (it goes before `piModel`). An item without a model starts
+  the agent as it is set up, as before; `--model ""` takes it off again. The office does not check that the model
+  exists: a name the agent refuses ends that step's session, and the sequence stops there.
 
 Whatever the agent, the office sets `OFFICE_SESSION_ID` and `OFFICE_AGENT` for the session it starts, so the
 `office-todo` CLI knows which session is calling, and it records the session's start and end itself. Board items,
@@ -479,7 +486,8 @@ office-todo settings defaultAgent aider             # or --agent aider on one se
 
 `{prompt}` becomes the office's prompt for the item (one argument, however long) and `{session}` the session id
 the office made. The value can also be `{"command": "...", "background": "...", "label": "..."}`: `background` is
-the command used when steps run as background processes, if the agent's non-interactive form differs. Ids are
+the command used when steps run as background processes, if the agent's non-interactive form differs, and
+`"model": "--model {model}"` says how the agent is given a model when an item names one (without it, such an item can't be started with that agent). Ids are
 lower-case letters, digits and `-`. `agents` can only be set from your own terminal, never from the web page or a
 session, because it holds commands the office will run.
 

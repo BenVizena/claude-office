@@ -171,10 +171,32 @@ export function saveSettings(s) {
   writeJsonAtomic(SETTINGS_FILE, s);
 }
 
+// Windows refuses to move a file onto one that another program has open without sharing it (a virus scanner, a
+// search indexer, a sync client or a backup looking at it for a moment): EPERM, EACCES or EBUSY. The file is free
+// again within milliseconds, so the move is tried again a few times before it counts as failed.
+export const RENAME_WAITS_MS = [5, 10, 20, 40, 80, 150, 250]; // about half a second in all
+const HELD_OPEN = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+/**
+ * Moves a finished temp file over `file`, trying again (after short blocking waits) while the target is held open.
+ * When it can't be done the temp file is removed and the error thrown. `rename` is there for tests.
+ */
+export function renameOver(tmp, file, { waits = RENAME_WAITS_MS, rename = fs.renameSync } = {}) {
+  for (let i = 0; ; i++) {
+    try { return rename(tmp, file); } catch (e) {
+      if (!HELD_OPEN.has(e.code) || i >= waits.length) {
+        try { fs.rmSync(tmp, { force: true }); } catch { /* nothing to remove */ }
+        throw e;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waits[i]);
+    }
+  }
+}
+
 export function writeJsonAtomic(file, data) {
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-  fs.renameSync(tmp, file);
+  renameOver(tmp, file);
 }
 
 export function readJson(file, fallback) {

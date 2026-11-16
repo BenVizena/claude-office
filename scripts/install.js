@@ -91,8 +91,8 @@ whichever coding agent you are (Claude Code, Pi, or another one the office start
 ${T} list                          # open items as a tree (subtasks indented, claims shown)
 ${T} show <id>                     # one item with its subtasks and background
 ${T} claim <id>                    # "I'm working on this" — do this BEFORE starting an item
-${T} add "Short imperative task" [--parent <id>] [--priority low|normal|high] [--summary "one line of context"]
-${T} edit <id> [--text "better title"] [--priority low|normal|high] [--summary "..." | --summary ""]
+${T} add "Short imperative task" [--parent <id>] [--priority low|normal|high] [--summary "one line of context"] [--model <model>]
+${T} edit <id> [--text "better title"] [--priority low|normal|high] [--summary "..." | --summary ""] [--model <model> | --model ""]
 ${T} move <id> --parent <id>        # nest an existing item under another (or --root); keeps id + background
 ${T} depend <id> --on <other>        # <id> can't start until <other> is done (auto blocked/unblocked)
 ${T} check <id> "npm test"          # a command that proves it is done (or --clear); the user approves it in the office (unless they let checks run unapproved)
@@ -202,7 +202,22 @@ waiting.
 3. **Add checks** where a command can show a step worked (\`check <id> "npm test"\`): fast and specific. Unless the
    user lets checks run without approval (\`check\` says so), they approve checks a session sets, and a run stops at
    an unapproved one, so mention them to the user.
-4. **Run it:** \`${T} run <root id> [--max N] [--parallel N] [--agent <id>]\`. It covers the root, its subtasks and everything that waits
+4. **Pick a model for a step only when the user asks for one** ("do the review on opus", "use haiku for the
+   renames"): \`edit <id> --model <model>\` (or \`add ... --model <model>\`). The session the office starts on that
+   item then runs on that model; \`show\` and \`list\` print it under the item. The name is what the agent's own
+   \`--model\` takes: for Claude Code an alias (\`opus\`, \`sonnet\`, \`haiku\`) or a full model id; for Pi a pattern
+   such as \`ollama/qwen2.5:7b\`. Leave it off otherwise: an item without one starts the agent as the user set it
+   up. \`edit <id> --model ""\` takes it off again. An agent the user added from a command template takes a model
+   only if its template says how; if it doesn't, the step fails to start and the run stops, saying so.
+   The name must suit the agent that RUNS the step, which may not be the agent you are. So before you set one:
+   - find out which agent the steps start with: the \`--agent\` you pass to \`run\`, else the office's default
+     (\`${T} settings defaultAgent\`);
+   - check the name against that agent's models when it can list them (Pi: \`pi --list-models <search>\`, then
+     use the \`provider/id\` it prints; Claude Code takes \`opus\`, \`sonnet\`, \`haiku\` or a full model id);
+   - if you can't check it, use the name exactly as the user gave it and tell them you did not check it.
+   Nothing checks the name when you set it: a wrong one only shows when that step's session fails to start,
+   which stops the run there.
+5. **Run it:** \`${T} run <root id> [--max N] [--parallel N] [--agent <id>]\`. It covers the root, its subtasks and everything that waits
    on them. --max caps how many sessions it starts (default 5, at most 15); keep it to the number of items unless the
    user says otherwise. --parallel N (at most 4) runs up to N independent items at once, each in its own git worktree
    and branch made from your current worktree and merged back into it when done and verified; use it only for

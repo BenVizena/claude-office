@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { STAFF_DIR, REPO_DIR, normPath } from './config.js';
-import { claimItem, releaseItem, readBoard, claimIsStale, recordLaunch } from './todos.js';
+import { claimItem, releaseItem, readBoard, claimIsStale, recordLaunch, cleanModel } from './todos.js';
 import { subscribe } from './news.js';
 import { RUN_ENV } from './runpolicy.js';
 import { agentFor, CLEAR_ENV, OFFICE_SESSION_ENV, OFFICE_AGENT_ENV } from './agents/index.js';
@@ -69,7 +69,8 @@ export function assertStartable(room, id) {
 /**
  * Throws with a readable message when the item can't be started. Returns { session, worktree }. `own` is a worktree
  * the office just made for a plain ▶ start ({ worktree, branch, baseBranch }, from gitwork.createStepWorktree).
- * `agent` is the adapter to start (agents/index.js agentFor); without one, Claude Code.
+ * `agent` is the adapter to start (agents/index.js agentFor); without one, Claude Code. An item that names a model
+ * (item.model) is started on it; the model is returned as `model`.
  * A step with step.background runs with no window (steps.js): the agent in its non-interactive form, its output in a
  * log file, which is returned as `log` and kept on the item (item.launch.log).
  */
@@ -81,7 +82,8 @@ export function startOnItem({ room, id, worktree, agent = agentFor('claude'), st
   const pod = inside ? { path: worktree } : room.pods.find((p) => !p.removed && normPath(p.path) === normPath(worktree));
   if (!pod) throw new Error('that worktree is not part of this project');
   if (!fs.existsSync(pod.path)) throw new Error(`${pod.path} no longer exists`);
-  assertStartable(room, id);
+  // the model the item asks for ('' for none: the agent starts as it is set up)
+  const model = cleanModel(assertStartable(room, id).model);
 
   const session = crypto.randomUUID();
   // pending until the session's first event arrives (the launcher's start): a launch that never starts frees the item
@@ -93,7 +95,7 @@ export function startOnItem({ room, id, worktree, agent = agentFor('claude'), st
   const background = !!step?.background;
   let log = null;
   try {
-    const opts = { cwd: pod.path, argv: agent.command({ session, prompt: promptFor(room.key, id, step, own), permissionMode, background }),
+    const opts = { cwd: pod.path, argv: agent.command({ session, prompt: promptFor(room.key, id, step, own), permissionMode, background, model }),
       title: `${agent.label}: ${room.name} ${id}${step ? ` (step ${step.n})` : ''}`, name: session, session,
       env: { [OFFICE_SESSION_ENV]: session, [OFFICE_AGENT_ENV]: agent.id, ...(step ? { [RUN_ENV]: '1' } : {}) },
       // a step's window goes away with its session (the office ends it once the step is merged: the adapter's close)
@@ -105,8 +107,8 @@ export function startOnItem({ room, id, worktree, agent = agentFor('claude'), st
     throw e;
   }
   // (where its check runs and, for a background step, where its output is)
-  try { recordLaunch(room.key, id, { session, worktree: pod.path, ...(log ? { log } : {}) }); } catch { /* the item still runs */ }
-  return { session, worktree: pod.path, ...(log ? { log } : {}) };
+  try { recordLaunch(room.key, id, { session, worktree: pod.path, ...(log ? { log } : {}), ...(step?.branch ? { branch: step.branch.branch, baseBranch: step.branch.baseBranch } : {}) }); } catch { /* the item still runs */ }
+  return { session, worktree: pod.path, ...(log ? { log } : {}), ...(model ? { model } : {}) };
 }
 
 // ---- opening a terminal window, per platform ----

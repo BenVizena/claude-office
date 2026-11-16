@@ -6,6 +6,10 @@
 // An agent whose non-interactive form differs can give it as well, for steps run as background processes
 // (settings.stepRunner): {"aider":{"command":"aider --message {prompt}","background":"aider --yes --message {prompt}"}}.
 // Without one, a background step runs the same command, with its input closed.
+// An item can name the model its session should use (office-todo edit <id> --model ...). A template agent takes it
+// only when it says how: {"aider":{"command":"aider --message {prompt}","model":"--model {model}"}}. Those arguments
+// go right after the program's name when the item has a model, and are left out when it has none. Without a "model"
+// entry, starting the agent on an item that names a model is refused (rather than quietly using another model).
 import { killByCommandLine } from './proc.js';
 
 /** A command line as its arguments: split on spaces, with "double" and 'single' quotes keeping spaces. */
@@ -23,7 +27,7 @@ export function splitCommand(text) {
   return out;
 }
 
-/** def: the command template (a string, or its arguments as a list), or { command, background?, label? }. Throws if it can't be used. */
+/** def: the command template (a string, or its arguments as a list), or { command, background?, model?, label? }. Throws if it can't be used. */
 export function genericAgent(id, def) {
   const d = def && typeof def === 'object' && !Array.isArray(def) ? def : { command: def };
   const parse = (command, what) => {
@@ -36,13 +40,23 @@ export function genericAgent(id, def) {
   };
   const template = parse(d.command, 'command');
   const inBackground = d.background === undefined ? template : parse(d.background, 'background command');
+  let modelArgs = null;
+  if (d.model !== undefined) {
+    try { modelArgs = Array.isArray(d.model) ? d.model.map(String) : splitCommand(d.model ?? ''); }
+    catch (e) { throw new Error(`agent "${id}": ${e.message}`); }
+    if (!modelArgs.some((a) => a.includes('{model}'))) throw new Error(`agent "${id}": its model arguments need {model} where the model's name goes, like "--model {model}"`);
+  }
   return {
     id,
     label: typeof d.label === 'string' && d.label.trim() ? d.label.trim().slice(0, 40) : id,
     sessionEnv: [],
     clearEnv: [],
     // one pass, so a prompt that happens to hold "{session}" is left as it is
-    command: ({ session, prompt, background = false }) => (background ? inBackground : template).map((a) => a.replace(/\{(prompt|session)\}/g, (_, k) => (k === 'prompt' ? prompt : session))),
+    command: ({ session, prompt, background = false, model = '' }) => {
+      if (model && !modelArgs) throw new Error(`the item asks for the model ${model}, but the agent "${id}" has no way to pick one: give it model arguments in the agents setting, like {"command": "...", "model": "--model {model}"}, or take the model off the item`);
+      const [program, ...args] = (background ? inBackground : template).map((a) => a.replace(/\{(prompt|session)\}/g, (_, k) => (k === 'prompt' ? prompt : session)));
+      return [program, ...(model ? modelArgs.map((a) => a.replaceAll('{model}', model)) : []), ...args];
+    },
     // the launcher script is named after the session, so this finds it (and the agent, as its child) whatever the
     // template does with {session}
     close: (session) => killByCommandLine(session),

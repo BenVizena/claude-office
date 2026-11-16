@@ -37,6 +37,17 @@ const MAX_KEPT_STOPPED = 5; // finished or stopped runs kept on a board for the 
 const TURN_GRACE_MS = 60000;      // marked done while its session sat idle (e.g. by the user): don't wait for a Stop
 const NO_HOOKS_MS = 5 * 60000;    // no hook seen from it at all (office restarted?): assume its turn is over
 const STUCK_TURN_MS = 30 * 60000; // done, but no Stop for this long: assume its turn is over
+// Writing down that a step's session started is tried again after these waits when the board file can't be written
+// (Windows: something held it open). The session runs by then, so giving up must not look like a failed launch.
+const WRITE_RETRY_MS = [100, 300, 1000, 2000];
+async function persist(fn, waits = WRITE_RETRY_MS) {
+  for (let i = 0; ; i++) {
+    try { return await fn(); } catch (e) {
+      if (i >= waits.length) throw e;
+      await new Promise((r) => setTimeout(r, waits[i]));
+    }
+  }
+}
 
 /** The items a run started on `rootId` covers: it, its subtasks, and whatever waits on any of those, transitively. */
 export function scopeOf(board, rootId) {
@@ -193,7 +204,17 @@ async function closeStep(ctx, step, run) {
 async function processStep(slug, board, run, step, ctx, now) {
   const it = board.items.find((x) => x.id === step.id);
   if (!it) return { fail: `"${step.text || step.id}" was removed from the board` };
-  if (step.phase === 'launching') return { fail: `starting a session on "${it.text}" did not finish (was the office restarted?)` };
+  if (step.phase === 'launching') {
+    // Left in 'launching': the office stopped mid-launch, or the session started and writing that down failed.
+    // The launcher records the session on the item (item.launch) before the step is updated, so one made since
+    // this step was marked says the session did start: carry on with it instead of stopping the run on a step
+    // that is at work.
+    const l = it.launch;
+    if (!l?.session || !(l.at >= step.at)) return { fail: `starting a session on "${it.text}" did not finish (was the office restarted?)` };
+    const found = { session: l.session, phase: 'working', ...(l.branch ? { worktree: l.worktree, branch: l.branch, baseBranch: l.baseBranch } : {}) };
+    await patchStep(slug, run.id, it.id, (s, r) => { Object.assign(s, found); logLine(r, `"${it.text}" was started (its session is on the item): carrying on with it`); });
+    step = { ...step, ...found };
+  }
   // ('checking' or 'merging' seen here is left over from an office that stopped midway: ticks for one board never
   // overlap, so a live check or merge holds this board's tick until it ends. Both are simply done again.)
   if (it.status === 'done') {
@@ -267,8 +288,9 @@ async function processStep(slug, board, run, step, ctx, now) {
 
 /**
  * One round of the runner for one board: each of its running sequences in turn. ctx: { hookOf(session),
- * launch({ slug, id, worktree, step, max, run, git }) -> { session }, runCheck(cmd, cwd), git (gitwork.js),
- * notify(session, { text, needsYou }), closeSession?(session, agent id) (a cleanly finished step's terminal), canLaunch?(run) -> reason|null, autoApproveChecks?() -> bool, now? }. Returns what it did (for tests and
+ * launch({ slug, id, worktree, step, max, run, git }) -> { session, model?, log? }, runCheck(cmd, cwd), git (gitwork.js),
+ * notify(session, { text, needsYou }), closeSession?(session, agent id) (a cleanly finished step's terminal), canLaunch?(run) -> reason|null, autoApproveChecks?() -> bool, now?,
+ * writeRetryMs? (the waits between tries of the write after a launch, for tests) }. Returns what it did (for tests and
  * logs): 'idle' with none running, what the one did, or a list with several. Callers make sure two ticks for one board
  * never overlap.
  */
@@ -342,21 +364,31 @@ async function tickRun(slug, rid, ctx) {
     }
     // mark it first, so a crash mid-launch can't lead to a second session on another item
     run = await patchRun(slug, rid, (r) => { r.active.push({ id: next.id, text: next.text, at: Date.now(), phase: 'launching' }); r.launched++; });
-    let wt = null;
+    let wt = null, launched;
     try {
       if (parallel > 1) wt = await ctx.git.createStepWorktree(run.worktree, next.id);
-      const launched = await ctx.launch({ slug, id: next.id, worktree: wt?.worktree || run.worktree, step: run.launched, max: run.max, run, branch: wt });
-      run = await patchStep(slug, rid, next.id, (s, r) => {
-        Object.assign(s, { session: launched.session, at: Date.now(), phase: 'working' }, wt || {});
-        logLine(r, `step ${r.launched}: started "${next.text}"${wt ? ` in ${wt.worktree} on ${wt.branch}` : ''}${launched.log ? ` in the background (log: ${launched.log})` : ''}`);
-      });
-      did = 'launched';
+      launched = await ctx.launch({ slug, id: next.id, worktree: wt?.worktree || run.worktree, step: run.launched, max: run.max, run, branch: wt });
     } catch (e) {
       if (wt) { try { await ctx.git.removeStepWorktree(run.worktree, wt.worktree, wt.branch); } catch { /* keep it */ } }
       run = await patchRun(slug, rid, (r) => { r.active = r.active.filter((s) => s.id !== next.id); r.launched--; });
       if (run.active.length) { await halt(`could not start a session on "${next.text}": ${e.message}`); return 'stopping'; }
       return finish(`could not start a session on "${next.text}": ${e.message}`, false);
     }
+    // The session runs from here on. A board write that fails now (on Windows, something holding the file open for
+    // a moment) is not a launch that failed: stopping the run on it left a working step with nothing watching it.
+    // The write is tried again; if it still fails the step stays 'launching' and the next round picks it up from
+    // the item's launch record (processStep).
+    try {
+      run = await persist(() => patchStep(slug, rid, next.id, (s, r) => {
+        Object.assign(s, { session: launched.session, at: Date.now(), phase: 'working' }, wt || {});
+        logLine(r, `step ${r.launched}: started "${next.text}"${wt ? ` in ${wt.worktree} on ${wt.branch}` : ''}${launched.model ? ` on ${launched.model}` : ''}${launched.log ? ` in the background (log: ${launched.log})` : ''}`);
+      }), ctx.writeRetryMs);
+    } catch (e) {
+      console.error(`sequence on ${slug}: "${next.text}" was started, but that could not be written down (${e.message}); the next round picks it up`);
+      return 'launched';
+    }
+    if (!run) return 'stopped'; // the run was cleared off the board meanwhile
+    did = 'launched';
     board = readBoard(slug);
   }
   return did;

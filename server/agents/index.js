@@ -1,8 +1,10 @@
 // Coding agents the office can start on board items. Each is an adapter:
 //   { id, label,
-//     command({ session, prompt, permissionMode, background }) -> argv   the whole command line, program first;
+//     command({ session, prompt, permissionMode, background, model }) -> argv   the whole command line, program first;
 //                              background: its non-interactive form (claude -p, pi -p), for a step run with no
-//                              terminal (steps.js): it must do the prompt and exit without reading its input
+//                              terminal (steps.js): it must do the prompt and exit without reading its input;
+//                              model: the model the item asks for (item.model, see todos.js cleanModel), '' for
+//                              none: the agent then starts as it is set up. An agent that can't pick one throws.
 //     sessionEnv: [names]      variables the agent sets for the commands it runs, holding its session id
 //     clearEnv: [names]        variables a launched session must not inherit from the office's own environment
 //     close(session)           ends a session the office launched in a window, so its terminal window closes

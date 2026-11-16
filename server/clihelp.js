@@ -7,12 +7,17 @@ export const COMMANDS = [
   { names: ['show'], usage: 'show <id> [--all]', summary: 'one item with its subtasks, what waits on it and its background',
     details: 'Background entries are numbered (#1, #2, ...) for context --replaces / --retire. --all also shows retired entries.\n'
       + '"needed by" lists the items that wait on this one. --json gives {...item, subtasks, neededBy, background}.' },
-  { names: ['add'], usage: 'add "text" [--parent <id>] [--priority low|normal|high] [--summary "one line of context"]',
+  { names: ['add'], usage: 'add "text" [--parent <id>] [--priority low|normal|high] [--summary "one line of context"] [--model <model>]',
     summary: 'add an item (a subtask with --parent)',
     details: 'You follow items you add. A summary that is too long is shortened. If the board is new for this directory\n'
-      + 'the CLI says so: pass --board if you meant another one.' },
-  { names: ['edit'], usage: 'edit <id> [--text "new title"] [--priority low|normal|high] [--summary "..." | --summary ""]',
-    summary: 'change an item\'s title, priority or summary' },
+      + 'the CLI says so: pass --board if you meant another one.\n'
+      + '--model names the model a session the office starts on the item uses (a sequence step, or a start from the\n'
+      + 'board): what the agent\'s own --model takes, e.g. opus, sonnet, haiku or a full model id for Claude Code,\n'
+      + 'ollama/qwen2.5:7b for Pi. Without one the agent starts as it is set up.' },
+  { names: ['edit'], usage: 'edit <id> [--text "new title"] [--priority low|normal|high] [--summary "..." | --summary ""] [--model <model> | --model ""]',
+    summary: 'change an item\'s title, priority, summary or model',
+    details: '--model sets the model a session the office starts on the item uses (see add); --model "" takes it off again,\n'
+      + 'so the agent starts as it is set up. It changes nothing for a session already running on the item.' },
   { names: ['claim', 'start'], usage: 'claim <id> [--force]', summary: '"I\'m working on this" — do it before starting an item',
     details: 'Records this Claude Code session. A claim held by another live session is refused unless --force (take it\n'
       + 'over only when the user says so); a claim whose session has ended can be taken with a plain claim.\n'
@@ -49,7 +54,8 @@ export const COMMANDS = [
     details: 'From a session it asks: the office starts it or asks the user first, as its setting says. Typed by the user it\n'
       + 'starts (the running office picks it up). --parallel N runs up to N at once, each in its own worktree and branch,\n'
       + 'merged back into the worktree you ran it from (or --worktree). --agent picks the coding agent each step is started\n'
-      + 'with (claude, or one from the agents setting); without it, the defaultAgent setting.' },
+      + 'with (claude, or one from the agents setting); without it, the defaultAgent setting. Each step runs on its\n'
+      + 'item\'s own model when it has one (add / edit --model), else as the agent is set up.' },
   { names: ['runs'], usage: 'runs', summary: 'the board\'s sequences (running, stopping, finished) and any request waiting for the user' },
   { names: ['stop'], usage: 'stop [<run id>]', summary: 'the user stops a sequence (running steps finish first; again stops now)',
     details: 'Without an id: the board\'s oldest running sequence, else its oldest stopped one. Stopping a stopped one clears\n'

@@ -4,6 +4,7 @@
 // is nothing to map here. Pi asks no per-tool permission, so it has no permission modes: the one given is ignored.
 import { killByCommandLine } from './proc.js';
 import { piTranscripts } from './pi-transcript.js';
+import { cleanModel } from '../todos.js';
 
 /** A value for settings.piModel: a Pi --model pattern ("ollama/qwen2.5:7b", "sonnet:high"), or '' for Pi's own default. */
 export function checkPiModel(v) {
@@ -22,8 +23,9 @@ export function piAgent(settings = {}) {
     // background: print mode, said outright (Pi would pick it by itself without a terminal, but that is not relied
     // on), and -na so a project with a .pi folder is not asked about: there is nobody to answer, and the step would
     // hang. Trust-gated project-local .pi files are then ignored.
-    command({ session, prompt, background = false }) {
-      const model = settings.piModel ? checkPiModel(settings.piModel) : '';
+    // model: the item's own, which goes before the piModel setting
+    command({ session, prompt, background = false, model: asked = '' }) {
+      const model = asked ? cleanModel(asked) : settings.piModel ? checkPiModel(settings.piModel) : '';
       return ['pi', ...(background ? ['-p'] : []), ...(model ? ['--model', model] : []), '--session-id', session, ...(background ? ['-na'] : []), prompt];
     },
     // finds the pi process by the --session-id it was started with, as for claude

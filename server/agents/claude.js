@@ -2,15 +2,17 @@
 // scripts/install.js puts into ~/.claude/settings.json; its transcripts are read by server/scanner.js.
 import { claudeCommand } from '../config.js';
 import { killByCommandLine } from './proc.js';
+import { cleanModel } from '../todos.js';
 
 // Permission modes the office may start sessions in ('' passes no flag: the user's own Claude Code default applies).
 // 'dontAsk' and 'plan' are left out: a session that may not ask, or may not act, can't do a board item on its own.
 export const LAUNCH_PERMISSION_MODES = ['', 'manual', 'acceptEdits', 'auto', 'bypassPermissions'];
 
 /** The claude arguments for a launched session (background: print mode, which runs the prompt and exits). */
-export function launchArgs({ session, prompt, permissionMode = '', background = false }) {
+export function launchArgs({ session, prompt, permissionMode = '', background = false, model = '' }) {
   if (!LAUNCH_PERMISSION_MODES.includes(permissionMode)) throw new Error(`unknown permission mode ${permissionMode}`);
-  return [...(background ? ['-p'] : []), ...(permissionMode ? ['--permission-mode', permissionMode] : []), '--session-id', session, prompt];
+  // model: the item's own (an alias such as opus, or a full model id); without one no flag, so the user's default applies
+  return [...(background ? ['-p'] : []), ...(permissionMode ? ['--permission-mode', permissionMode] : []), ...(model ? ['--model', cleanModel(model)] : []), '--session-id', session, prompt];
 }
 
 /** A Notification hook for a session idle at its prompt (notification_type idle_prompt, or its message). */
@@ -43,9 +45,9 @@ export function claudeAgent(settings = {}) {
     permissionModes: LAUNCH_PERMISSION_MODES,
     // background: `claude -p`. Nobody can answer a permission prompt there, so what the permission mode doesn't
     // allow is refused: settings.launchPermissionMode decides how much such a step can do.
-    command({ session, prompt, permissionMode = '', background = false }) {
+    command({ session, prompt, permissionMode = '', background = false, model = '' }) {
       const [cmd, pre] = claudeCommand(settings.claudePath || 'claude');
-      return [cmd, ...pre, ...launchArgs({ session, prompt, permissionMode, background })];
+      return [cmd, ...pre, ...launchArgs({ session, prompt, permissionMode, background, model })];
     },
     // finds the claude process by the --session-id it was started with (`claude --resume <id>` elsewhere is not
     // matched); the launcher then runs on to its end, so even a Windows Terminal tab closes

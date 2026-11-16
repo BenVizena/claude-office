@@ -454,7 +454,7 @@ export class UI {
   async saveEdit(id) {
     const v = this.current;
     const val = (f) => $(`[data-edit-for="${id}"][data-field="${f}"]`, this.body)?.value;
-    const patch = { text: val('text'), summary: val('summary'), priority: val('priority') };
+    const patch = { text: val('text'), summary: val('summary'), priority: val('priority'), model: val('model') };
     await api('/api/todos', { board: v.board, action: 'update', id, patch });
     // the check is the user's own when they type it here (approved); left unchanged, a session's unapproved one stays so
     const cur = (this.getState()?.todoBoards || []).find((b) => b.id === v.board)?.items.find((x) => x.id === id)?.check?.cmd || '';

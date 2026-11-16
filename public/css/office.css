@@ -259,6 +259,7 @@ body.placing canvas { cursor: move !important; }
 .td-edit input[data-field="text"] { font-weight: 550; }
 .td-edit-row { display: flex; align-items: center; gap: 8px; }
 .td-edit-row .spacer { flex: 1; }
+.td-edit-row input.td-edit-model { width: 13em; padding: 3px 8px; font-size: 12.5px; margin-left: 4px; }
 .td-edit-row select { border: 1px solid var(--line); border-radius: 6px; background: white; font-size: 12.5px; margin-left: 4px; }
 .td-edit-row .primary { padding: 6px 14px; font-size: 13px; }
 

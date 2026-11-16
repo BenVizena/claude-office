@@ -157,6 +157,7 @@ export function detailOf(r, width, opts = {}) {
     out.push([[' '], [it.id, COLORS.room], [` · ${it.status}${it.priority && it.priority !== 'normal' ? ` · ${it.priority}` : ''}${claimed ? ` · claimed by ${who(it.claim)}` : it.claim ? ` · claim left by ${who(it.claim)} (session ended)` : ''}`, COLORS.dim]]);
     text(it.text, COLORS.name);
     if (it.summary) text(it.summary, COLORS.dim);
+    if (it.model && it.status !== 'done') text(`model: ${it.model} (for a session the office starts on it)`, COLORS.dim, 1);
     if (waits.length) text(`waits on: ${waits.map((w) => `${w.id} ${w.text}`).join('; ')}`, RED, 2);
     else if (it.status === 'blocked' && it.note) text(`blocked: ${it.note}`, RED, 2);
     const note = checkNote(it, opts, r.board);

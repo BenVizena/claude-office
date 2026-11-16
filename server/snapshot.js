@@ -3,7 +3,7 @@
 // file; nothing connects to the office.
 import fs from 'node:fs';
 import path from 'node:path';
-import { OFFICE_DIR, readJson } from './config.js';
+import { OFFICE_DIR, readJson, renameOver } from './config.js';
 
 export const STATE_FILE = path.join(OFFICE_DIR, 'state.json');
 
@@ -15,14 +15,16 @@ const TMP = /^state\.json\.\d+\.tmp$/;
 
 /**
  * Written on every rebuild, so it is kept cheap: compact JSON (no indenting: programs read it), one temp file per
- * process moved into place. A write that fails (a viewer holding the file on Windows, a full disk) removes its temp
+ * process moved into place (tried a few times while something holds the file open on Windows). A write that still
+ * fails (a full disk, a file held for longer) removes its temp
  * file, a full copy of the model, and the next rebuild writes again.
  */
 export function writeSnapshot(state, mode) {
   const tmp = `${STATE_FILE}.${process.pid}.tmp`;
   try {
     fs.writeFileSync(tmp, JSON.stringify({ at: Date.now(), pid: process.pid, mode, network: openNetworkHandles(), state }));
-    fs.renameSync(tmp, STATE_FILE);
+    // (written every few seconds, and the next rebuild writes again: a short try, so a held file never stalls the office)
+    renameOver(tmp, STATE_FILE, { waits: [5, 15, 40] });
   } catch (e) {
     try { fs.rmSync(tmp, { force: true }); } catch { /* nothing to remove */ }
     console.error('could not write the state snapshot:', e.message);

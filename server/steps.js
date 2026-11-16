@@ -10,7 +10,7 @@
 import { spawn, execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { OFFICE_DIR } from './config.js';
+import { OFFICE_DIR, renameOver } from './config.js';
 import { readEvent, writeEvent } from './events.js';
 import { eventKind } from './agents/index.js';
 
@@ -46,7 +46,7 @@ function writeRecord(rec) {
   const file = recordFile(rec.session);
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(rec));
-  fs.renameSync(tmp, file);
+  renameOver(tmp, file);
 }
 
 /** The record of a step the office ran in the background, or null (a session in a window, or not the office's). */

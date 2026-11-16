@@ -3,10 +3,12 @@
 //
 // Item: { id, text, status: todo|doing|blocked|done, priority, parent?, order?, blockedBy?: [ids], by, bySession?,
 //         claim?: { by, session, at, ended?, pending? }, createdAt, updatedAt, completedAt?, completedBy?, note?,
-//         check?: { cmd, by, at, approved, last?: { ok, code, ms, at } }, launch?: { session, worktree, at },
+//         check?: { cmd, by, at, approved, last?: { ok, code, ms, at } },
+//         launch?: { session, worktree, at, log?, branch?, baseBranch? }, model?,
 //         reviewed?: { by, session?, at } }  (kept by a tidy-up review: its flags stay hidden until updatedAt passes at)
 // parent makes a subtask tree; blockedBy are dependencies ("can't start until those are done") across the board.
 // order sorts siblings once someone has arranged them by hand.
+// model is the model a session the office starts on the item is asked to use (without one: as the agent is set up).
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -141,9 +143,21 @@ function cleanPriority(p) {
   return p;
 }
 
-export function addItem(slug, meta, { text, by = 'you', session, priority = 'normal', parent, summary }) {
+/**
+ * The model for sessions the office starts on an item: the name the agent's own --model takes ("opus",
+ * "claude-sonnet-5-5", "ollama/qwen2.5:7b"), or '' for none (the agent then starts as it is set up). It goes on a
+ * command line, so it is one word of plain characters.
+ */
+export function cleanModel(m) {
+  const s = String(m ?? '').trim();
+  if (s && !/^[A-Za-z0-9][\w./:@*[\]-]{0,119}$/.test(s)) throw new Error('a model is one word such as opus, claude-sonnet-5-5 or ollama/qwen2.5:7b (or "" for none)');
+  return s;
+}
+
+export function addItem(slug, meta, { text, by = 'you', session, priority = 'normal', parent, summary, model }) {
   text = cleanText(text);
   priority = cleanPriority(priority);
+  model = cleanModel(model);
   let full;
   ({ summary, full } = summary ? cleanSummary(summary) : { summary: '' });
   const created = mutate(slug, meta, (b) => {
@@ -160,6 +174,7 @@ export function addItem(slug, meta, { text, by = 'you', session, priority = 'nor
       id: crypto.randomBytes(3).toString('hex'),
       text, ...(summary ? { summary } : {}), status: 'todo', priority,
       ...(parentId ? { parent: parentId } : {}),
+      ...(model ? { model } : {}),
       by, ...(session ? { bySession: session } : {}),
       createdAt: Date.now(), updatedAt: Date.now(),
     };
@@ -173,8 +188,10 @@ export function addItem(slug, meta, { text, by = 'you', session, priority = 'nor
 
 export function updateItem(slug, id, patch) {
   const sum = patch.summary !== undefined ? cleanSummary(patch.summary) : null;
+  const model = patch.model !== undefined ? cleanModel(patch.model) : null;
   const updated = mutate(slug, null, (b) => {
     const it = find(b, id);
+    if (model !== null) { if (model) it.model = model; else delete it.model; }
     if (patch.text !== undefined) it.text = cleanText(patch.text);
     if (patch.priority !== undefined) it.priority = cleanPriority(patch.priority);
     if (sum) { if (sum.summary) it.summary = sum.summary; else delete it.summary; }
@@ -325,10 +342,12 @@ export function recordCheck(slug, id, { ok, code, ms }) {
 }
 
 /** Where a ▶ launch put the item's session (its check runs there). */
-export function recordLaunch(slug, id, { session, worktree, log }) {
+export function recordLaunch(slug, id, { session, worktree, log, branch, baseBranch }) {
   return mutate(slug, null, (b) => {
     const it = find(b, id);
-    it.launch = { session, worktree, at: Date.now(), ...(log ? { log } : {}) }; // log: a background step's output (steps.js)
+    // log: a background step's output (steps.js); branch, baseBranch: the worktree the office made for it (a
+    // parallel sequence step), so the sequence can pick the step up again from the item alone (chain.js)
+    it.launch = { session, worktree, at: Date.now(), ...(log ? { log } : {}), ...(branch ? { branch, baseBranch } : {}) };
     return { ...it };
   });
 }
