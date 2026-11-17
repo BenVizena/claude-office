@@ -60,6 +60,9 @@ describe('install.js', () => {
     assert.equal(r.status, 0, r.stderr);
     const text = fs.readFileSync(SKILL, 'utf8');
     assert.match(text, /^---\nname: office-todo\ndescription: /);
+    // Pi refuses a skill whose description is over 1024 characters
+    const description = text.match(/^description: (.*)$/m)[1];
+    assert.ok(Buffer.byteLength(description) <= 1024, `the description is ${Buffer.byteLength(description)} bytes`);
     assert.ok(text.includes('bin/office-todo.js" claim <id>'));
     assert.ok(!text.includes('${T}'), 'no template placeholders left');
     // for any agent, and for an office with no web page
